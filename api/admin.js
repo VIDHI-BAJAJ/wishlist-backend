@@ -49,7 +49,8 @@ module.exports = async function handler(req, res) {
     // HTML dashboard
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('X-Frame-Options', 'DENY');
+    // Allow embedding inside Shopify admin (myshopify.com & shopify.com)
+    res.setHeader('Content-Security-Policy', "frame-ancestors 'self' https://*.myshopify.com https://admin.shopify.com");
     return res.status(200).send(renderDashboardHTML());
   } catch (err) {
     console.error('[Admin Error]', err);
