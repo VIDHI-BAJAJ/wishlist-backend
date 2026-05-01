@@ -51,6 +51,7 @@ module.exports = async function handler(req, res) {
           displayNameKey: 'product_title',
           fieldDefinitions: [
             { key: 'phone',          name: 'Customer Phone',   type: 'single_line_text_field',  required: true  },
+            { key: 'customer_name',  name: 'Customer Name',    type: 'single_line_text_field',  required: false },
             { key: 'product_id',     name: 'Product ID',       type: 'single_line_text_field',  required: true  },
             { key: 'product_title',  name: 'Product Title',    type: 'single_line_text_field',  required: false },
             { key: 'product_handle', name: 'Product Handle',   type: 'single_line_text_field',  required: false },
@@ -65,12 +66,13 @@ module.exports = async function handler(req, res) {
 
     const result = data.metaobjectDefinitionCreate;
     if (result.userErrors.length) {
-      // Code TAKEN means the type already exists — that's fine
+      // Code TAKEN means the type already exists — try to add the customer_name field
       const alreadyExists = result.userErrors.some(e => e.code === 'TAKEN');
       if (alreadyExists) {
+        const updateMsg = await ensureCustomerNameField();
         return res.status(200).json({
           success: true,
-          message: 'Metaobject definition already exists. You are all set!',
+          message: 'Metaobject definition already exists. ' + updateMsg,
         });
       }
       return res.status(400).json({ errors: result.userErrors });
@@ -84,4 +86,52 @@ module.exports = async function handler(req, res) {
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
+};
+
+// ─── Ensure the customer_name field exists on an existing definition ──────────
+async function ensureCustomerNameField() {
+  // 1. Look up the existing definition
+  const lookup = await gql(
+    `query {
+       metaobjectDefinitionByType(type: "wishlist_entry") {
+         id
+         fieldDefinitions { key name }
+       }
+     }`
+  );
+
+  const def = lookup.metaobjectDefinitionByType;
+  if (!def) return 'Could not look up existing definition.';
+
+  const hasName = def.fieldDefinitions.some(f => f.key === 'customer_name');
+  if (hasName) return 'customer_name field already present. You are all set!';
+
+  // 2. Add the customer_name field
+  const update = await gql(
+    `mutation AddCustomerName($id: ID!, $definition: MetaobjectDefinitionUpdateInput!) {
+       metaobjectDefinitionUpdate(id: $id, definition: $definition) {
+         metaobjectDefinition { id }
+         userErrors { field message code }
+       }
+     }`,
+    {
+      id: def.id,
+      definition: {
+        fieldDefinitions: [
+          {
+            create: {
+              key: 'customer_name',
+              name: 'Customer Name',
+              type: 'single_line_text_field',
+              required: false,
+            },
+          },
+        ],
+      },
+    }
+  );
+
+  const errs = update.metaobjectDefinitionUpdate.userErrors;
+  if (errs.length) return 'Could not add customer_name field: ' + JSON.stringify(errs);
+  return 'Added the new customer_name field successfully.';
 };
