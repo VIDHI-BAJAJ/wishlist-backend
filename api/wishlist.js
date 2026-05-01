@@ -53,7 +53,7 @@ module.exports = async function handler(req, res) {
 // ─── Add to wishlist ──────────────────────────────────────────────────────────
 async function addToWishlist(req, res) {
   const {
-    phone, product_id, product_title,
+    phone, customer_name, product_id, product_title,
     product_handle, variant_id, product_image, product_price,
   } = req.body || {};
 
@@ -65,6 +65,8 @@ async function addToWishlist(req, res) {
   if (cleanPhone.length < 7) {
     return res.status(400).json({ error: 'Invalid phone number' });
   }
+
+  const cleanName = sanitizeName(customer_name);
 
   // Prevent duplicate entries
   const existingId = await findEntry(cleanPhone, String(product_id));
@@ -85,6 +87,7 @@ async function addToWishlist(req, res) {
     {
       fields: [
         { key: 'phone',           value: cleanPhone },
+        { key: 'customer_name',   value: cleanName },
         { key: 'product_id',      value: String(product_id) },
         { key: 'product_title',   value: product_title   || '' },
         { key: 'product_handle',  value: product_handle  || '' },
@@ -183,4 +186,10 @@ async function findEntry(phone, product_id) {
 function sanitizePhone(phone) {
   // Keep digits, +, spaces, dashes, parentheses; strip everything else
   return String(phone).replace(/[^\d+\s\-()]/g, '').trim().substring(0, 20);
+}
+
+function sanitizeName(name) {
+  if (!name) return '';
+  // Allow letters (incl. unicode), spaces, dots, hyphens, apostrophes; cap length
+  return String(name).replace(/[<>{}|\\^`]/g, '').trim().substring(0, 80);
 }
