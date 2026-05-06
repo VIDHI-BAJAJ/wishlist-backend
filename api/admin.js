@@ -52,11 +52,14 @@ module.exports = async function handler(req, res) {
     // Allow embedding inside Shopify admin (myshopify.com & shopify.com)
     res.setHeader('Content-Security-Policy', "frame-ancestors 'self' https://*.myshopify.com https://admin.shopify.com");
     return res.status(200).send(renderDashboardHTML());
-  } catch (err) {
-    console.error('[Admin Error]', err);
-    res.setHeader('Content-Type', 'application/json');
-    return res.status(500).json({ error: 'Internal server error' });
-  }
+  } 
+  catch (err) {
+  console.error('[Admin Error FULL]', err);
+  return res.status(500).json({
+    error: err.message,
+    stack: err.stack,
+  });
+}
 };
 
 // ─── Fetch ALL entries and group by phone ─────────────────────────────────────
