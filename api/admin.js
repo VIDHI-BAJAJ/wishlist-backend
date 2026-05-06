@@ -578,7 +578,7 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
     }
 
     try {
-      const res = await fetch('/api/admin?data=customers&secret=' + encodeURIComponent(secret));
+     const url = window.location.origin + '/api/admin?data=customers&secret=' + encodeURIComponent(secret);
 
       if (res.status === 401) {
         sessionStorage.removeItem(LS_KEY); // clear bad saved secret
