@@ -499,6 +499,12 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
     if (loginScreen) loginScreen.style.display = 'none';
     if (appShell)    appShell.style.display    = 'flex';
 
+    // Defensive: directly unhide the overview screen so the static HTML
+    // (page header, date bar, card containers) shows even if the main
+    // dashboard script never runs or throws.
+    var overviewEl = document.getElementById('screen-overview');
+    if (overviewEl) overviewEl.style.display = 'block';
+
     // Call the main script's render hook. Because the main script's IIFE may
     // not have executed yet (it runs after this <script> block parses), poll
     // for the hook to appear and then call it. This avoids any race condition.
@@ -749,6 +755,11 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
 
   // ─── Init dashboard after login ──────────────────────────
   function initDashboard() {
+    // Always show the overview screen FIRST, so the static page header,
+    // date bar, and card containers become visible regardless of whether
+    // any individual render below succeeds.
+    try { showScreen('overview'); } catch (e) { console.error('[WL showScreen]', e); }
+
     try {
       const now = new Date();
       const d7  = new Date(now); d7.setDate(d7.getDate() - 7);
@@ -764,10 +775,13 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
         RANGE_START = fromIso; RANGE_END = toIso;
         applyFilterAndRender();
       }
-      // Ensure overview screen is visible
-      showScreen('overview');
     } catch (e) {
       console.error('[WL initDashboard]', e);
+      // Even if filter/render fails, try to render with no filter as a fallback
+      try {
+        RANGE_START = null; RANGE_END = null;
+        applyFilterAndRender();
+      } catch (e2) { console.error('[WL fallback render]', e2); }
     }
   }
 
@@ -821,11 +835,11 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
   // ─── Overview ────────────────────────────────────────────
   function renderOverview() {
     showScreen('overview');
-    renderCapsules();
-    renderRecent();
-    renderPopular();
-    renderPriceDist();
-    renderTrend();
+    try { renderCapsules(); }   catch (e) { console.error('[WL renderCapsules]', e); }
+    try { renderRecent(); }     catch (e) { console.error('[WL renderRecent]', e); }
+    try { renderPopular(); }    catch (e) { console.error('[WL renderPopular]', e); }
+    try { renderPriceDist(); }  catch (e) { console.error('[WL renderPriceDist]', e); }
+    try { renderTrend(); }      catch (e) { console.error('[WL renderTrend]', e); }
   }
 
   function renderCapsules() {
