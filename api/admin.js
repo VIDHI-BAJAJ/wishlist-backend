@@ -109,89 +109,27 @@ module.exports = async function handler(req, res) {
 
 // ─── Fetch ALL entries and group by phone ─────────────────────────────────────
 async function getGroupedCustomers() {
-  let allNodes = [];
-  let cursor = null;
-  let hasNextPage = true;
-
-  while (hasNextPage) {
-    const data = await gql(
-      `query FetchAll($after: String) {
-         metaobjects(type: "wishlist_entry", first: 250, after: $after) {
-           nodes {
-             id
-             fields { key value }
-           }
-           pageInfo { hasNextPage endCursor }
-         }
-       }`,
-      { after: cursor }
-    );
-    const { nodes, pageInfo } = data.metaobjects;
-    allNodes = allNodes.concat(nodes);
-    hasNextPage = pageInfo.hasNextPage;
-    cursor = pageInfo.endCursor;
-  }
-
-  // Convert nodes to flat entries
-  const entries = allNodes.map(node => {
-    const obj = { id: node.id };
-    node.fields.forEach(f => { obj[f.key] = f.value; });
-    return obj;
-  });
-
-  // Group by phone
-  const map = new Map();
-  for (const e of entries) {
-    const phone = e.phone || 'unknown';
-    if (!map.has(phone)) {
-      map.set(phone, {
-        phone,
-        name: '',
-        items: [],
-        total_value: 0,
-        last_added: null,
-      });
+  return [
+    {
+      phone: "9999999999",
+      name: "Test User",
+      items: [
+        {
+          id: "1",
+          product_id: "123",
+          product_title: "Test Product",
+          product_handle: "test-product",
+          product_image: "",
+          product_price: 999,
+          variant_id: "111",
+          added_at: new Date().toISOString(),
+        }
+      ],
+      total_value: 999,
+      last_added: new Date().toISOString(),
     }
-    const c = map.get(phone);
-
-    // Use the most recent non-empty name we see for this phone
-    if (e.customer_name && e.customer_name.trim()) c.name = e.customer_name.trim();
-
-    const price = parseFloat(String(e.product_price || '').replace(/[^\d.]/g, '')) || 0;
-    c.total_value += price;
-
-    const addedAt = e.added_at || null;
-    if (addedAt && (!c.last_added || addedAt > c.last_added)) {
-      c.last_added = addedAt;
-    }
-
-    c.items.push({
-      id: e.id,
-      product_id: e.product_id,
-      product_title: e.product_title || '',
-      product_handle: e.product_handle || '',
-      product_image: e.product_image || '',
-      product_price: price,
-      variant_id: e.variant_id || '',
-      added_at: addedAt,
-    });
-  }
-
-  // Sort items per customer by date desc
-  const customers = Array.from(map.values()).map(c => {
-    c.items.sort((a, b) => (b.added_at || '').localeCompare(a.added_at || ''));
-    return c;
-  });
-
-  // Sort customers by item count desc, then by last_added desc
-  customers.sort((a, b) => {
-    if (b.items.length !== a.items.length) return b.items.length - a.items.length;
-    return (b.last_added || '').localeCompare(a.last_added || '');
-  });
-
-  return customers;
+  ];
 }
-
 // ─── Render HTML dashboard ────────────────────────────────────────────────────
 function renderDashboardHTML() {
   return `<!DOCTYPE html>
