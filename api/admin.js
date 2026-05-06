@@ -13,67 +13,24 @@ const SHOPIFY_TOKEN   = process.env.SHOPIFY_ACCESS_TOKEN;
 const API_SECRET      = process.env.WISHLIST_API_SECRET || '';
 
 // ─── Shopify GraphQL helper ───────────────────────────────────────────────────
-// ─── Shopify GraphQL helper ───────────────────────────────────────────────────
 async function gql(query, variables = {}) {
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  console.log('SHOPIFY DEBUG START');
-  console.log('SHOPIFY_STORE:', SHOPIFY_STORE);
-  console.log('TOKEN EXISTS:', !!SHOPIFY_TOKEN);
-
-  try {
-    const response = await fetch(
-      `https://${SHOPIFY_STORE}/admin/api/2024-10/graphql.json`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Shopify-Access-Token': SHOPIFY_TOKEN,
-        },
-        body: JSON.stringify({
-          query,
-          variables,
-        }),
-      }
-    );
-
-    const rawText = await response.text();
-
-    console.log('SHOPIFY STATUS:', response.status);
-    console.log('SHOPIFY RAW RESPONSE:', rawText);
-
-    if (!response.ok) {
-      throw new Error(
-        `Shopify API Error (${response.status}): ${rawText}`
-      );
+  const res = await fetch(
+    `https://${SHOPIFY_STORE}/admin/api/2024-10/graphql.json`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Shopify-Access-Token': SHOPIFY_TOKEN,
+      },
+      body: JSON.stringify({ query, variables }),
     }
-
-    let json;
-
-    try {
-      json = JSON.parse(rawText);
-    } catch (parseError) {
-      console.error('JSON PARSE ERROR:', parseError);
-      throw new Error('Invalid JSON returned from Shopify');
-    }
-
-    if (json.errors) {
-      console.error('GRAPHQL ERRORS:', json.errors);
-      throw new Error(JSON.stringify(json.errors));
-    }
-
-    console.log('SHOPIFY SUCCESS');
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-
-    return json.data;
-
-  } catch (error) {
-    console.error('SHOPIFY FETCH FAILED:', error);
-
-    throw new Error(
-      error.message || 'Unknown Shopify GraphQL Error'
-    );
-  }
+  );
+  if (!res.ok) throw new Error(`Shopify API error: ${res.status} ${await res.text()}`);
+  const json = await res.json();
+  if (json.errors) throw new Error(JSON.stringify(json.errors));
+  return json.data;
 }
+
 // ─── Main handler ─────────────────────────────────────────────────────────────
 module.exports = async function handler(req, res) {
   try {
@@ -95,41 +52,98 @@ module.exports = async function handler(req, res) {
     // Allow embedding inside Shopify admin (myshopify.com & shopify.com)
     res.setHeader('Content-Security-Policy', "frame-ancestors 'self' https://*.myshopify.com https://admin.shopify.com");
     return res.status(200).send(renderDashboardHTML());
-  } 
-  catch (err) {
-  console.error('FULL SERVER ERROR:', err);
-
-  return res.status(500).json({
-    success: false,
-    error: err.message,
-    stack: err.stack,
-  });
-}
+  } catch (err) {
+    console.error('[Admin Error]', err);
+    res.setHeader('Content-Type', 'application/json');
+    return res.status(500).json({ error: 'Internal server error' });
+  }
 };
 
 // ─── Fetch ALL entries and group by phone ─────────────────────────────────────
 async function getGroupedCustomers() {
-  return [
-    {
-      phone: "9999999999",
-      name: "Test User",
-      items: [
-        {
-          id: "1",
-          product_id: "123",
-          product_title: "Test Product",
-          product_handle: "test-product",
-          product_image: "",
-          product_price: 999,
-          variant_id: "111",
-          added_at: new Date().toISOString(),
-        }
-      ],
-      total_value: 999,
-      last_added: new Date().toISOString(),
+  let allNodes = [];
+  let cursor = null;
+  let hasNextPage = true;
+
+  while (hasNextPage) {
+    const data = await gql(
+      `query FetchAll($after: String) {
+         metaobjects(type: "wishlist_entry", first: 250, after: $after) {
+           nodes {
+             id
+             fields { key value }
+           }
+           pageInfo { hasNextPage endCursor }
+         }
+       }`,
+      { after: cursor }
+    );
+    const { nodes, pageInfo } = data.metaobjects;
+    allNodes = allNodes.concat(nodes);
+    hasNextPage = pageInfo.hasNextPage;
+    cursor = pageInfo.endCursor;
+  }
+
+  // Convert nodes to flat entries
+  const entries = allNodes.map(node => {
+    const obj = { id: node.id };
+    node.fields.forEach(f => { obj[f.key] = f.value; });
+    return obj;
+  });
+
+  // Group by phone
+  const map = new Map();
+  for (const e of entries) {
+    const phone = e.phone || 'unknown';
+    if (!map.has(phone)) {
+      map.set(phone, {
+        phone,
+        name: '',
+        items: [],
+        total_value: 0,
+        last_added: null,
+      });
     }
-  ];
+    const c = map.get(phone);
+
+    // Use the most recent non-empty name we see for this phone
+    if (e.customer_name && e.customer_name.trim()) c.name = e.customer_name.trim();
+
+    const price = parseFloat(String(e.product_price || '').replace(/[^\d.]/g, '')) || 0;
+    c.total_value += price;
+
+    const addedAt = e.added_at || null;
+    if (addedAt && (!c.last_added || addedAt > c.last_added)) {
+      c.last_added = addedAt;
+    }
+
+    c.items.push({
+      id: e.id,
+      product_id: e.product_id,
+      product_title: e.product_title || '',
+      product_handle: e.product_handle || '',
+      product_image: e.product_image || '',
+      product_price: price,
+      variant_id: e.variant_id || '',
+      added_at: addedAt,
+    });
+  }
+
+  // Sort items per customer by date desc
+  const customers = Array.from(map.values()).map(c => {
+    c.items.sort((a, b) => (b.added_at || '').localeCompare(a.added_at || ''));
+    return c;
+  });
+
+  // Sort customers by item count desc, then by last_added desc
+  customers.sort((a, b) => {
+    if (b.items.length !== a.items.length) return b.items.length - a.items.length;
+    return (b.last_added || '').localeCompare(a.last_added || '');
+  });
+
+  return customers;
 }
+
 // ─── Render HTML dashboard ────────────────────────────────────────────────────
 function renderDashboardHTML() {
   return `<!DOCTYPE html>
@@ -468,7 +482,6 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
 
 <script>
 (function () {
-  'use strict';
   const LS_KEY = 'wl_admin_secret';
   let CUSTOMERS = [];
   let FILTERED   = [];
@@ -477,175 +490,152 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
   let RANGE_END   = null;
   let PREV_SCREEN = 'overview';
 
+  // ─── DOM refs ─────────────────────────────────────────────
   const $ = id => document.getElementById(id);
 
   // ─── Helpers ──────────────────────────────────────────────
   function showToast(msg) {
     const t = $('toast');
-    if (!t) return;
     t.textContent = msg;
     t.classList.add('show');
     clearTimeout(showToast._t);
     showToast._t = setTimeout(() => t.classList.remove('show'), 2500);
   }
 
-  function esc(s) {
+  function escapeHTML(s) {
     return String(s == null ? '' : s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
   function formatDate(iso) {
-    if (!iso) return '\u2014';
-    try { return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }); }
-    catch { return '\u2014'; }
+    if (!iso) return '—';
+    try {
+      return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    } catch { return '—'; }
   }
 
-  function fmt(n) {
-    if (!n || isNaN(n)) return '\u20b90';
-    return '\u20b9' + Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+  function formatMoney(n) {
+    if (!n || isNaN(n)) return '₹0';
+    return '₹' + Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 });
   }
 
   function initials(name, phone) {
     if (name && name.trim()) {
-      const p = name.trim().split(/\s+/);
-      return (((p[0]||'')[0]||'') + ((p[1]||'')[0]||'')).toUpperCase() || '?';
+      const parts = name.trim().split(/\s+/);
+      return (((parts[0] || '')[0] || '') + ((parts[1] || '')[0] || '')).toUpperCase() || '?';
     }
     if (phone) return phone.replace(/\D/g, '').slice(-2);
     return '?';
   }
 
-  function http(u) {
-    if (!u) return '';
-    if (u.startsWith('//')) return 'https:' + u;
-    if (u.startsWith('http')) return u;
-    return 'https://' + u;
+  function ensureHttps(url) {
+    if (!url) return '';
+    if (url.startsWith('//')) return 'https:' + url;
+    if (url.startsWith('http')) return url;
+    return 'https://' + url;
   }
-
-  // ─── Login UI helpers ─────────────────────────────────────
-  function setErr(msg) {
-    const el = $('login-error');
-    if (el) { el.textContent = msg; el.style.color = msg.startsWith('\u2713') ? '#1a7f5a' : '#c0392b'; }
-  }
-
-  function setBusy(yes) {
-    const btn = $('login-btn');
-    const inp = $('login-input');
-    if (btn) { btn.disabled = yes; btn.textContent = yes ? 'Signing in\u2026' : 'Sign in'; }
-    if (inp) inp.disabled = yes;
-  }
-
-  // ─── Core login fetch ─────────────────────────────────────
-  async function doFetch(secret) {
-    const url = '/api/admin?data=customers&secret=' + encodeURIComponent(secret);
-    let res;
-    try {
-      res = await fetch(url, {
-  method: 'GET',
-  cache: 'no-store',
-  headers: {
-    'Accept': 'application/json'
-  }
-});
-    } catch (netErr) {
-      throw new Error('Network error \u2014 are you online? (' + netErr.message + ')');
-    }
-    if (res.status === 401) {
-      throw Object.assign(new Error('Wrong secret \u2014 check your WISHLIST_API_SECRET in Vercel env vars'), { code: 401 });
-    }
-    if (res.status === 500) {
-      let body = '';
-      try { body = await res.text(); } catch {}
-      throw new Error('Server error (500) \u2014 Shopify env vars (SHOPIFY_STORE_URL / SHOPIFY_ACCESS_TOKEN) are likely missing or wrong in Vercel. Body: ' + body.slice(0, 200));
-    }
-    if (!res.ok) {
-      throw new Error('HTTP ' + res.status + ' \u2014 unexpected server response');
-    }
-    let data;
-    try { data = await res.json(); } catch (e) { throw new Error('Invalid JSON response from server'); }
-    return data;
-  }
-
-  // ─── Sign in (called by button) ───────────────────────────
-  async function signIn() {
-    const secret = ($('login-input').value || '').trim();
-    if (!secret) { setErr('Please enter your API secret.'); return; }
-
-    setBusy(true);
-    setErr('');
-
-    try {
-      const data = await doFetch(secret);
-      CUSTOMERS = data.customers || [];
-      CURRENT_SECRET = secret;
-      sessionStorage.setItem(LS_KEY, secret);
-      $('login-screen').style.display = 'none';
-      $('app-shell').style.display = 'grid';
-      initDashboard();
-    } catch (e) {
-      console.error('[WL Admin signIn]', e);
-      if (e.code === 401) sessionStorage.removeItem(LS_KEY);
-      setErr(e.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  // ─── Auto-login (silent, from URL or session) ─────────────
-  async function autoLogin(secret) {
-    try {
-      const data = await doFetch(secret);
-      CUSTOMERS = data.customers || [];
-      CURRENT_SECRET = secret;
-      sessionStorage.setItem(LS_KEY, secret);
-      $('login-screen').style.display = 'none';
-      $('app-shell').style.display = 'grid';
-      initDashboard();
-      return true;
-    } catch (e) {
-      console.warn('[WL Admin autoLogin failed]', e.message);
-      sessionStorage.removeItem(LS_KEY);
-      // Show login screen with the secret pre-filled and a helpful error
-      $('login-input').value = secret;
-      setErr('Auto-login failed: ' + e.message);
-      return false;
-    }
-  }
-
-  // ─── Wire up button ───────────────────────────────────────
-  $('login-btn').addEventListener('click', signIn);
-  $('login-input').addEventListener('keydown', e => { if (e.key === 'Enter') signIn(); });
-
-  // ─── Logout ───────────────────────────────────────────────
-  function doLogout() {
-    sessionStorage.removeItem(LS_KEY);
-    CURRENT_SECRET = ''; CUSTOMERS = []; FILTERED = [];
-    $('app-shell').style.display = 'none';
-    $('login-screen').style.display = 'flex';
-    $('login-input').value = '';
-    setErr('');
-    if (window.history && window.history.replaceState)
-      window.history.replaceState({}, '', window.location.pathname);
-  }
-  window.doLogout = doLogout;
 
   // ─── Screen routing ───────────────────────────────────────
   function showScreen(name) {
     if (name !== 'customer-detail') PREV_SCREEN = name;
     ['overview', 'customers-full', 'customer-detail'].forEach(s => {
-      const el = $('screen-' + s); if (el) el.style.display = 'none';
+      const el = $('screen-' + s);
+      if (el) el.style.display = 'none';
     });
-    const t = $('screen-' + name); if (t) t.style.display = 'block';
+    const target = $('screen-' + name);
+    if (target) target.style.display = 'block';
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
     const map = { 'overview': 'nav-overview', 'customers-full': 'nav-customers-full' };
-    const key = name === 'customer-detail'
+    const navKey = name === 'customer-detail'
       ? (PREV_SCREEN === 'customers-full' ? 'nav-customers-full' : 'nav-overview')
       : map[name];
-    if (key && $(key)) $(key).classList.add('active');
+    if (navKey && $(navKey)) $(navKey).classList.add('active');
     if (name === 'customers-full') renderTable();
   }
 
-  // ─── Init dashboard ───────────────────────────────────────
+  // ─── Login ────────────────────────────────────────────────
+  function setLoginState(loading) {
+    const btn = $('login-btn');
+    const inp = $('login-input');
+    if (!btn) return;
+    btn.disabled = loading;
+    btn.textContent = loading ? 'Signing in…' : 'Sign in';
+    if (inp) inp.disabled = loading;
+  }
+
+  function showLoginError(msg) {
+    const el = $('login-error');
+    if (el) el.textContent = msg;
+  }
+
+  async function tryLogin(secret, silent = false) {
+    if (!secret) return false;
+
+    if (!silent) {
+      setLoginState(true);
+      showLoginError('');
+    }
+
+    try {
+      const res = await fetch('/api/admin?data=customers&secret=' + encodeURIComponent(secret));
+
+      if (res.status === 401) {
+        sessionStorage.removeItem(LS_KEY); // clear bad saved secret
+        if (!silent) showLoginError('Incorrect secret. Please try again.');
+        return false;
+      }
+      if (!res.ok) {
+        const txt = await res.text().catch(() => '');
+        throw new Error('HTTP ' + res.status + (txt ? ': ' + txt.slice(0, 120) : ''));
+      }
+
+      const data = await res.json();
+      CUSTOMERS = data.customers || [];
+      CURRENT_SECRET = secret;
+      sessionStorage.setItem(LS_KEY, secret);
+
+      // Show dashboard, hide login
+      $('login-screen').style.display = 'none';
+      $('app-shell').style.display = 'grid';
+
+      initDashboard();
+      return true;
+
+    } catch (e) {
+      console.error('[WL Login]', e);
+      sessionStorage.removeItem(LS_KEY);
+      if (!silent) showLoginError('Error: ' + e.message + '. Check console for details.');
+      return false;
+    } finally {
+      if (!silent) setLoginState(false);
+    }
+  }
+
+  $('login-btn').addEventListener('click', () => {
+    const secret = $('login-input').value.trim();
+    if (!secret) { showLoginError('Please enter your API secret.'); return; }
+    tryLogin(secret, false);
+  });
+  $('login-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') $('login-btn').click();
+  });
+
+  function doLogout() {
+    sessionStorage.removeItem(LS_KEY);
+    CURRENT_SECRET = '';
+    CUSTOMERS = [];
+    FILTERED = [];
+    $('app-shell').style.display = 'none';
+    $('login-screen').style.display = 'flex';
+    $('login-input').value = '';
+    if (window.history && window.history.replaceState) {
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }
+  window.doLogout = doLogout;
+
+  // ─── Init dashboard after login ──────────────────────────
   function initDashboard() {
     const now = new Date();
     const d7  = new Date(now); d7.setDate(d7.getDate() - 7);
@@ -657,13 +647,14 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
   // ─── Date range ──────────────────────────────────────────
   function setRangeDays(days, btn) {
     document.querySelectorAll('.date-chip').forEach(c => c.classList.remove('active'));
-    if (btn) btn.classList.add('active');
+    btn.classList.add('active');
     if (days === 0) {
       RANGE_START = null; RANGE_END = null;
-      $('range-from').value = ''; $('range-to').value = '';
+      $('range-from').value = '';
+      $('range-to').value   = '';
     } else {
-      const now = new Date(), from = new Date(now);
-      from.setDate(from.getDate() - days);
+      const now  = new Date();
+      const from = new Date(now); from.setDate(from.getDate() - days);
       RANGE_START = from.toISOString().slice(0, 10);
       RANGE_END   = now.toISOString().slice(0, 10);
       $('range-from').value = RANGE_START;
@@ -673,7 +664,8 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
   }
 
   function applyCustomRange() {
-    const s = $('range-from').value, e = $('range-to').value;
+    const s = $('range-from').value;
+    const e = $('range-to').value;
     if (!s || !e) return;
     document.querySelectorAll('.date-chip').forEach(c => c.classList.remove('active'));
     RANGE_START = s; RANGE_END = e;
@@ -684,12 +676,16 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
     if (!RANGE_START || !RANGE_END) {
       FILTERED = CUSTOMERS.map(c => ({ ...c, items: [...c.items] }));
     } else {
-      const s = new Date(RANGE_START); s.setHours(0,0,0,0);
-      const e = new Date(RANGE_END);   e.setHours(23,59,59,999);
+      const s = new Date(RANGE_START); s.setHours(0, 0, 0, 0);
+      const e = new Date(RANGE_END);   e.setHours(23, 59, 59, 999);
       FILTERED = CUSTOMERS.map(c => {
-        const items = c.items.filter(it => { if (!it.added_at) return false; const d = new Date(it.added_at); return d>=s&&d<=e; });
+        const items = c.items.filter(it => {
+          if (!it.added_at) return false;
+          const d = new Date(it.added_at);
+          return d >= s && d <= e;
+        });
         if (!items.length) return null;
-        return { ...c, items, total_value: items.reduce((a,it)=>a+(it.product_price||0),0) };
+        return { ...c, items, total_value: items.reduce((a, it) => a + (it.product_price || 0), 0) };
       }).filter(Boolean);
     }
     renderOverview();
@@ -698,147 +694,281 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
   // ─── Overview ────────────────────────────────────────────
   function renderOverview() {
     showScreen('overview');
-    renderCapsules(); renderRecent(); renderPopular(); renderPriceDist(); renderTrend();
+    renderCapsules();
+    renderRecent();
+    renderPopular();
+    renderPriceDist();
+    renderTrend();
   }
 
   function renderCapsules() {
-    const tc=FILTERED.length, ti=FILTERED.reduce((a,c)=>a+c.items.length,0);
-    const avg=tc?(ti/tc).toFixed(1):'0', top=FILTERED.reduce((m,c)=>Math.max(m,c.items.length),0);
-    $('capsules').innerHTML=`
-      <div class="cap"><div class="cap-accent" style="background:#0a0a0a"></div><div class="cap-label">Customers</div><div class="cap-value">${tc}</div><div class="cap-sub">in selected range</div></div>
-      <div class="cap"><div class="cap-accent" style="background:#4a55c1"></div><div class="cap-label">Total Items</div><div class="cap-value">${ti}</div><div class="cap-sub">saved products</div></div>
-      <div class="cap"><div class="cap-accent" style="background:#1a7f5a"></div><div class="cap-label">Avg Items</div><div class="cap-value">${avg}</div><div class="cap-sub">per customer</div></div>
-      <div class="cap"><div class="cap-accent" style="background:#b07800"></div><div class="cap-label">Most Wishlisted</div><div class="cap-value">${top}</div><div class="cap-sub">items by one customer</div></div>`;
+    const tc  = FILTERED.length;
+    const ti  = FILTERED.reduce((a, c) => a + c.items.length, 0);
+    const avg = tc ? (ti / tc).toFixed(1) : '0';
+    const top = FILTERED.reduce((m, c) => Math.max(m, c.items.length), 0);
+    $('capsules').innerHTML = \`
+      <div class="cap">
+        <div class="cap-accent" style="background:#0a0a0a"></div>
+        <div class="cap-label">Customers</div>
+        <div class="cap-value">\${tc}</div>
+        <div class="cap-sub">in selected range</div>
+      </div>
+      <div class="cap">
+        <div class="cap-accent" style="background:#4a55c1"></div>
+        <div class="cap-label">Total Items</div>
+        <div class="cap-value">\${ti}</div>
+        <div class="cap-sub">saved products</div>
+      </div>
+      <div class="cap">
+        <div class="cap-accent" style="background:#1a7f5a"></div>
+        <div class="cap-label">Avg Items</div>
+        <div class="cap-value">\${avg}</div>
+        <div class="cap-sub">per customer</div>
+      </div>
+      <div class="cap">
+        <div class="cap-accent" style="background:#b07800"></div>
+        <div class="cap-label">Most Wishlisted</div>
+        <div class="cap-value">\${top}</div>
+        <div class="cap-sub">items by one customer</div>
+      </div>
+    \`;
   }
 
   function renderRecent() {
-    const top=FILTERED.slice(0,9);
-    if(!top.length){$('recent-list').innerHTML='<div class="empty">No customers in range</div>';return;}
-    $('recent-list').innerHTML=top.map(c=>{
-      const idx=CUSTOMERS.findIndex(x=>x.phone===c.phone);
-      return `<div class="cust-row" onclick="openDetail(${idx})">
-        <div class="av">${esc(initials(c.name,c.phone))}</div>
-        <div class="cust-info"><div class="cust-name">${esc(c.name||c.phone)}</div><div class="cust-meta">${c.items.length} item${c.items.length===1?'':'s'} \u00b7 ${formatDate(c.last_added)}</div></div>
-        <div class="cust-badge">${c.items.length}</div></div>`;
+    const top = FILTERED.slice(0, 9);
+    if (!top.length) { $('recent-list').innerHTML = '<div class="empty">No customers in range</div>'; return; }
+    $('recent-list').innerHTML = top.map(c => {
+      const idx = CUSTOMERS.findIndex(x => x.phone === c.phone);
+      return \`
+        <div class="cust-row" onclick="openDetail(\${idx})">
+          <div class="av">\${escapeHTML(initials(c.name, c.phone))}</div>
+          <div class="cust-info">
+            <div class="cust-name">\${escapeHTML(c.name || c.phone)}</div>
+            <div class="cust-meta">\${c.items.length} item\${c.items.length === 1 ? '' : 's'} · \${formatDate(c.last_added)}</div>
+          </div>
+          <div class="cust-badge">\${c.items.length}</div>
+        </div>\`;
     }).join('');
   }
 
   function renderPopular() {
-    const counts={};
-    FILTERED.forEach(c=>c.items.forEach(it=>{const k=it.product_id||it.product_title||'x';if(!counts[k])counts[k]={title:it.product_title||'Untitled',image:it.product_image,price:it.product_price,count:0};counts[k].count++;}));
-    const prods=Object.values(counts).sort((a,b)=>b.count-a.count).slice(0,7);
-    if(!prods.length){$('popular-list').innerHTML='<div class="empty">No data</div>';return;}
-    const max=prods[0].count;
-    $('popular-list').innerHTML=prods.map((p,i)=>`<div class="prod-row">
-      <div class="prod-rank">${i+1}</div>
-      ${p.image?`<img class="prod-thumb" src="${esc(http(p.image))}" loading="lazy" alt="" onerror="this.style.display='none'"/>`:`<div class="prod-thumb-ph">\uD83D\uDECD</div>`}
-      <div class="prod-info"><div class="prod-name">${esc(p.title)}</div><div class="prod-saves">${p.count} saves \u00b7 ${fmt(p.price)}</div></div>
-      <div class="prod-bar-wrap"><div class="prod-bar-bg"><div class="prod-bar-fill" style="width:${Math.round(p.count/max*100)}%"></div></div></div>
-    </div>`).join('');
+    const counts = {};
+    FILTERED.forEach(c => c.items.forEach(it => {
+      const key = it.product_id || it.product_title || 'x';
+      if (!counts[key]) counts[key] = { title: it.product_title || 'Untitled', image: it.product_image, price: it.product_price, count: 0 };
+      counts[key].count++;
+    }));
+    const prods = Object.values(counts).sort((a, b) => b.count - a.count).slice(0, 7);
+    if (!prods.length) { $('popular-list').innerHTML = '<div class="empty">No data</div>'; return; }
+    const max = prods[0].count;
+    $('popular-list').innerHTML = prods.map((p, i) => \`
+      <div class="prod-row">
+        <div class="prod-rank">\${i + 1}</div>
+        \${p.image
+          ? \`<img class="prod-thumb" src="\${escapeHTML(ensureHttps(p.image))}" loading="lazy" alt="" onerror="this.style.display='none'"/>\`
+          : \`<div class="prod-thumb-ph">🛍</div>\`}
+        <div class="prod-info">
+          <div class="prod-name">\${escapeHTML(p.title)}</div>
+          <div class="prod-saves">\${p.count} saves · \${formatMoney(p.price)}</div>
+        </div>
+        <div class="prod-bar-wrap">
+          <div class="prod-bar-bg"><div class="prod-bar-fill" style="width:\${Math.round(p.count / max * 100)}%"></div></div>
+        </div>
+      </div>\`).join('');
   }
 
   function renderPriceDist() {
-    const brackets=[
-      {l:'< \u20b9500',min:0,max:500,c:'#4a55c1'},{l:'\u20b9500\u20132k',min:500,max:2000,c:'#1a7f5a'},
-      {l:'\u20b92k\u20135k',min:2000,max:5000,c:'#b07800'},{l:'\u20b95k\u201310k',min:5000,max:10000,c:'#c0392b'},
-      {l:'> \u20b910k',min:10000,max:Infinity,c:'#0a0a0a'}
+    const brackets = [
+      { l: '< ₹500',    min: 0,     max: 500,      c: '#4a55c1' },
+      { l: '₹500–2k',   min: 500,   max: 2000,     c: '#1a7f5a' },
+      { l: '₹2k–5k',    min: 2000,  max: 5000,     c: '#b07800' },
+      { l: '₹5k–10k',   min: 5000,  max: 10000,    c: '#c0392b' },
+      { l: '> ₹10k',    min: 10000, max: Infinity,  c: '#0a0a0a' },
     ];
-    const all=FILTERED.flatMap(c=>c.items);
-    const rows=brackets.map(b=>({...b,n:all.filter(it=>it.product_price>=b.min&&it.product_price<b.max).length}));
-    const max=Math.max(...rows.map(r=>r.n),1);
-    $('price-dist').innerHTML=rows.map(r=>`<div class="dist-row"><div class="dist-lbl">${r.l}</div><div class="dist-bar-wrap"><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:${Math.round(r.n/max*100)}%;background:${r.c}"></div></div></div><div class="dist-ct">${r.n}</div></div>`).join('');
+    const all  = FILTERED.flatMap(c => c.items);
+    const rows = brackets.map(b => ({ ...b, n: all.filter(it => it.product_price >= b.min && it.product_price < b.max).length }));
+    const max  = Math.max(...rows.map(r => r.n), 1);
+    $('price-dist').innerHTML = rows.map(r => \`
+      <div class="dist-row">
+        <div class="dist-lbl">\${r.l}</div>
+        <div class="dist-bar-wrap"><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:\${Math.round(r.n / max * 100)}%;background:\${r.c}"></div></div></div>
+        <div class="dist-ct">\${r.n}</div>
+      </div>\`).join('');
   }
 
   function renderTrend() {
-    const cvs=$('trend-cvs'), ctx=cvs.getContext('2d');
-    const W=cvs.offsetWidth||260, H=72;
-    cvs.width=W*devicePixelRatio; cvs.height=H*devicePixelRatio;
-    ctx.scale(devicePixelRatio,devicePixelRatio); ctx.clearRect(0,0,W,H);
-    const s=RANGE_START?new Date(RANGE_START):new Date(Date.now()-7*864e5);
-    const e=RANGE_END?new Date(RANGE_END):new Date();
-    const diffDays=Math.max(1,Math.round((e-s)/864e5));
-    const buckets=Math.min(diffDays,14), stepMs=(e-s)/buckets;
-    const days=Array.from({length:buckets},(_,i)=>{
-      const from=new Date(s.getTime()+i*stepMs), to=new Date(s.getTime()+(i+1)*stepMs);
-      const count=FILTERED.flatMap(c=>c.items).filter(it=>{if(!it.added_at)return false;const d=new Date(it.added_at);return d>=from&&d<to;}).length;
-      return {count,label:from.toLocaleDateString('en-IN',{day:'numeric',month:'short'})};
+    const cvs = $('trend-cvs');
+    const ctx = cvs.getContext('2d');
+    const W = cvs.offsetWidth || 260; const H = 72;
+    cvs.width = W * devicePixelRatio; cvs.height = H * devicePixelRatio;
+    ctx.scale(devicePixelRatio, devicePixelRatio);
+    ctx.clearRect(0, 0, W, H);
+
+    const s = RANGE_START ? new Date(RANGE_START) : new Date(Date.now() - 7 * 864e5);
+    const e = RANGE_END   ? new Date(RANGE_END)   : new Date();
+    const diffDays = Math.max(1, Math.round((e - s) / 864e5));
+    const buckets  = Math.min(diffDays, 14);
+    const stepMs   = (e - s) / buckets;
+
+    const days = Array.from({ length: buckets }, (_, i) => {
+      const from  = new Date(s.getTime() + i * stepMs);
+      const to    = new Date(s.getTime() + (i + 1) * stepMs);
+      const count = FILTERED.flatMap(c => c.items).filter(it => {
+        if (!it.added_at) return false;
+        const d = new Date(it.added_at); return d >= from && d < to;
+      }).length;
+      return { count, label: from.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) };
     });
-    const maxC=Math.max(...days.map(d=>d.count),1), pad=6, cW=W-pad*2, cH=H-18;
+
+    const maxC = Math.max(...days.map(d => d.count), 1);
+    const pad = 6; const cW = W - pad * 2; const cH = H - 18;
+
     ctx.beginPath();
-    days.forEach((d,i)=>{const x=pad+i*(cW/(buckets-1||1)),y=H-14-(d.count/maxC*(cH-6));i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);});
-    ctx.strokeStyle='#0a0a0a';ctx.lineWidth=1.5;ctx.lineJoin='round';ctx.lineCap='round';ctx.stroke();
-    ctx.lineTo(pad+(buckets-1)*(cW/(buckets-1||1)),H-14);ctx.lineTo(pad,H-14);ctx.closePath();
-    ctx.fillStyle='rgba(10,10,10,0.05)';ctx.fill();
-    days.forEach((d,i)=>{const x=pad+i*(cW/(buckets-1||1)),y=H-14-(d.count/maxC*(cH-6));ctx.beginPath();ctx.arc(x,y,2.5,0,Math.PI*2);ctx.fillStyle='#0a0a0a';ctx.fill();});
-    const show=[0,Math.floor(buckets/2),buckets-1];
-    $('trend-labels').innerHTML=days.map((d,i)=>show.includes(i)?`<span class="trend-lbl">${d.label}</span>`:`<span></span>`).join('');
+    days.forEach((d, i) => {
+      const x = pad + i * (cW / (buckets - 1 || 1));
+      const y = H - 14 - (d.count / maxC * (cH - 6));
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = '#0a0a0a'; ctx.lineWidth = 1.5; ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.stroke();
+
+    ctx.lineTo(pad + (buckets - 1) * (cW / (buckets - 1 || 1)), H - 14);
+    ctx.lineTo(pad, H - 14); ctx.closePath();
+    ctx.fillStyle = 'rgba(10,10,10,0.05)'; ctx.fill();
+
+    days.forEach((d, i) => {
+      const x = pad + i * (cW / (buckets - 1 || 1));
+      const y = H - 14 - (d.count / maxC * (cH - 6));
+      ctx.beginPath(); ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = '#0a0a0a'; ctx.fill();
+    });
+
+    const show = [0, Math.floor(buckets / 2), buckets - 1];
+    $('trend-labels').innerHTML = days.map((d, i) =>
+      show.includes(i) ? \`<span class="trend-lbl">\${d.label}</span>\` : \`<span></span>\`
+    ).join('');
   }
 
   // ─── Full customer table ──────────────────────────────────
   function renderTable() {
-    const q=($('search-in')?.value||'').trim().toLowerCase();
-    const list=q?CUSTOMERS.filter(c=>(c.phone||'').toLowerCase().includes(q)||(c.name||'').toLowerCase().includes(q)):CUSTOMERS;
-    $('tbl-body').innerHTML=list.length?list.map(c=>{
-      const idx=CUSTOMERS.indexOf(c);
-      return `<div class="tbl-row" onclick="openDetail(${idx})">
-        <div class="td-name-wrap"><div class="av">${esc(initials(c.name,c.phone))}</div><div><div class="td-bold">${esc(c.name||'\u2014')}</div><div class="td-muted">${esc(c.phone||'')}</div></div></div>
-        <div class="td-bold">${c.items.length}</div><div class="td-txt">${fmt(c.total_value)}</div><div class="td-txt">${formatDate(c.last_added)}</div><div class="td-arrow">\u2192</div></div>`;
-    }).join(''):'<div class="empty">No customers found</div>';
+    const q = ($('search-in')?.value || '').trim().toLowerCase();
+    const list = q
+      ? CUSTOMERS.filter(c => (c.phone || '').toLowerCase().includes(q) || (c.name || '').toLowerCase().includes(q))
+      : CUSTOMERS;
+    $('tbl-body').innerHTML = list.length
+      ? list.map(c => {
+          const idx = CUSTOMERS.indexOf(c);
+          return \`
+            <div class="tbl-row" onclick="openDetail(\${idx})">
+              <div class="td-name-wrap">
+                <div class="av">\${escapeHTML(initials(c.name, c.phone))}</div>
+                <div>
+                  <div class="td-bold">\${escapeHTML(c.name || '—')}</div>
+                  <div class="td-muted">\${escapeHTML(c.phone || '')}</div>
+                </div>
+              </div>
+              <div class="td-bold">\${c.items.length}</div>
+              <div class="td-txt">\${formatMoney(c.total_value)}</div>
+              <div class="td-txt">\${formatDate(c.last_added)}</div>
+              <div class="td-arrow">→</div>
+            </div>\`;
+        }).join('')
+      : '<div class="empty">No customers found</div>';
   }
 
   // ─── Customer detail ─────────────────────────────────────
   function openDetail(idx) {
-    const c=CUSTOMERS[idx]; if(!c) return;
-    const from=PREV_SCREEN;
-    $('back-btn').onclick=()=>showScreen(from==='customers-full'?'customers-full':'overview');
-    $('detail-content').innerHTML=`
+    const c = CUSTOMERS[idx];
+    if (!c) return;
+    const from = PREV_SCREEN;
+    $('back-btn').onclick = () => showScreen(from === 'customers-full' ? 'customers-full' : 'overview');
+
+    $('detail-content').innerHTML = \`
       <div class="detail-profile">
-        <div class="detail-av">${esc(initials(c.name,c.phone))}</div>
-        <div><div class="detail-name">${esc(c.name||c.phone)}</div><div class="detail-phone">${c.name?esc(c.phone):''}</div></div>
+        <div class="detail-av">\${escapeHTML(initials(c.name, c.phone))}</div>
+        <div>
+          <div class="detail-name">\${escapeHTML(c.name || c.phone)}</div>
+          <div class="detail-phone">\${c.name ? escapeHTML(c.phone) : ''}</div>
+        </div>
       </div>
       <div class="detail-caps">
-        <div class="cap"><div class="cap-accent" style="background:#0a0a0a"></div><div class="cap-label">Wishlist value</div><div class="cap-value" style="font-size:19px">${fmt(c.total_value)}</div></div>
-        <div class="cap"><div class="cap-accent" style="background:#4a55c1"></div><div class="cap-label">Items saved</div><div class="cap-value" style="font-size:19px">${c.items.length}</div></div>
-        <div class="cap"><div class="cap-accent" style="background:#1a7f5a"></div><div class="cap-label">Last activity</div><div class="cap-value" style="font-size:14px;font-weight:400;margin-top:4px">${formatDate(c.last_added)}</div></div>
+        <div class="cap"><div class="cap-accent" style="background:#0a0a0a"></div><div class="cap-label">Wishlist value</div><div class="cap-value" style="font-size:19px">\${formatMoney(c.total_value)}</div></div>
+        <div class="cap"><div class="cap-accent" style="background:#4a55c1"></div><div class="cap-label">Items saved</div><div class="cap-value" style="font-size:19px">\${c.items.length}</div></div>
+        <div class="cap"><div class="cap-accent" style="background:#1a7f5a"></div><div class="cap-label">Last activity</div><div class="cap-value" style="font-size:14px;font-weight:400;margin-top:4px">\${formatDate(c.last_added)}</div></div>
       </div>
-      <div class="items-title">Saved items (${c.items.length})</div>
-      ${c.items.map(it=>`<div class="detail-item">
-        ${it.product_image?`<img class="d-img" src="${esc(http(it.product_image))}" loading="lazy" alt="" onerror="this.style.display='none'"/>`:`<div class="d-img-ph">\uD83D\uDECD</div>`}
-        <div style="flex:1;min-width:0"><div class="d-item-title">${esc(it.product_title||'Untitled product')}</div><div class="d-item-meta">Added ${formatDate(it.added_at)}</div></div>
-        <div class="d-item-price">${fmt(it.product_price)}</div></div>`).join('')}`;
+      <div class="items-title">Saved items (\${c.items.length})</div>
+      \${c.items.map(it => \`
+        <div class="detail-item">
+          \${it.product_image
+            ? \`<img class="d-img" src="\${escapeHTML(ensureHttps(it.product_image))}" loading="lazy" alt="" onerror="this.style.display='none'"/>\`
+            : \`<div class="d-img-ph">🛍</div>\`}
+          <div style="flex:1;min-width:0">
+            <div class="d-item-title">\${escapeHTML(it.product_title || 'Untitled product')}</div>
+            <div class="d-item-meta">Added \${formatDate(it.added_at)}</div>
+          </div>
+          <div class="d-item-price">\${formatMoney(it.product_price)}</div>
+        </div>\`).join('')}
+    \`;
     showScreen('customer-detail');
   }
-  window.openDetail=openDetail;
+  window.openDetail = openDetail;
 
   // ─── CSV Export ──────────────────────────────────────────
   function exportCSV() {
-    if(!CUSTOMERS.length){showToast('Nothing to export');return;}
-    const rows=[['Name','Phone','Product Title','Product Handle','Variant ID','Price','Added At']];
-    CUSTOMERS.forEach(c=>c.items.forEach(it=>rows.push([c.name||'',c.phone||'',it.product_title||'',it.product_handle||'',it.variant_id||'',it.product_price||'',it.added_at||''])));
-    const csv=rows.map(r=>r.map(cell=>{const s=String(cell??'');return/[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}).join(',')).join('\n');
-    const a=document.createElement('a');
-    a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8;'}));
-    a.download='wishlist-'+new Date().toISOString().slice(0,10)+'.csv';
-    document.body.appendChild(a);a.click();document.body.removeChild(a);
-    showToast('CSV downloaded \u2713');
+    if (!CUSTOMERS.length) { showToast('Nothing to export'); return; }
+    const rows = [['Name', 'Phone', 'Product Title', 'Product Handle', 'Variant ID', 'Price', 'Added At']];
+    CUSTOMERS.forEach(c => {
+      c.items.forEach(it => {
+        rows.push([c.name || '', c.phone || '', it.product_title || '', it.product_handle || '', it.variant_id || '', it.product_price || '', it.added_at || '']);
+      });
+    });
+    const csv = rows.map(r =>
+      r.map(cell => {
+        const s = String(cell == null ? '' : cell);
+        if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+        return s;
+      }).join(',')
+    ).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url;
+    a.download = 'wishlist-customers-' + new Date().toISOString().slice(0, 10) + '.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast('CSV downloaded ✓');
   }
 
-  window.showScreen=showScreen; window.setRangeDays=setRangeDays;
-  window.applyCustomRange=applyCustomRange; window.exportCSV=exportCSV; window.renderTable=renderTable;
+  window.showScreen       = showScreen;
+  window.setRangeDays     = setRangeDays;
+  window.applyCustomRange = applyCustomRange;
+  window.exportCSV        = exportCSV;
+  window.renderTable      = renderTable;
 
-  // ─── Boot ─────────────────────────────────────────────────
+  // ─── Boot: prefer ?secret= in URL, then sessionStorage, then show login ───
+  function getUrlSecret() {
+    try { return new URLSearchParams(window.location.search).get('secret') || ''; }
+    catch { return ''; }
+  }
+
   (async function boot() {
-    const urlSecret = (() => { try { return new URLSearchParams(location.search).get('secret')||''; } catch { return ''; } })();
+    const urlSecret   = getUrlSecret();
     const savedSecret = sessionStorage.getItem(LS_KEY) || '';
-    const auto = urlSecret || savedSecret;
-    if (auto) {
-      await autoLogin(auto);
+    const autoSecret  = urlSecret || savedSecret;
+
+    if (autoSecret) {
+      // Pre-fill input so user sees what was tried if it fails
+      $('login-input').value = autoSecret;
+      const ok = await tryLogin(autoSecret, true); // silent=true skips button state changes
+      if (!ok) {
+        showLoginError('Session expired or secret invalid. Please sign in again.');
+        $('login-input').select();
+      }
     } else {
       $('login-input').focus();
     }
   })();
-
-})();</script>
+})();
+</script>
 </body>
 </html>`;
 }
