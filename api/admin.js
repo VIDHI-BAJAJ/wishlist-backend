@@ -493,6 +493,26 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
   // ─── DOM refs ─────────────────────────────────────────────
   const $ = id => document.getElementById(id);
 
+  // ─── Safe storage (sessionStorage can throw inside Shopify Admin iframe) ─
+  // In embedded iframes (Shopify Admin) some browsers block storage access
+  // and throw a SecurityError. Wrap every call so a failure never kills
+  // the login flow — we just fall back to in-memory storage for the session.
+  let memStore = {};
+  const safeStore = {
+    get(k) {
+      try { return sessionStorage.getItem(k); }
+      catch (e) { return memStore[k] || null; }
+    },
+    set(k, v) {
+      try { sessionStorage.setItem(k, v); }
+      catch (e) { memStore[k] = v; }
+    },
+    remove(k) {
+      try { sessionStorage.removeItem(k); } catch (e) {}
+      delete memStore[k];
+    }
+  };
+
   // ─── Helpers ──────────────────────────────────────────────
   function showToast(msg) {
     const t = $('toast');
@@ -582,7 +602,7 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
       const res = await fetch(url);
 
       if (res.status === 401) {
-        sessionStorage.removeItem(LS_KEY); // clear bad saved secret
+        safeStore.remove(LS_KEY); // clear bad saved secret
         if (!silent) showLoginError('Incorrect secret. Please try again.');
         return false;
       }
@@ -594,7 +614,7 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
       const data = await res.json();
       CUSTOMERS = data.customers || [];
       CURRENT_SECRET = secret;
-      sessionStorage.setItem(LS_KEY, secret);
+      safeStore.set(LS_KEY, secret);
 
       // Show dashboard, hide login
       $('login-screen').style.display = 'none';
@@ -605,7 +625,7 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
 
     } catch (e) {
       console.error('[WL Login]', e);
-      sessionStorage.removeItem(LS_KEY);
+      safeStore.remove(LS_KEY);
       if (!silent) showLoginError('Error: ' + e.message + '. Check console for details.');
       return false;
     } finally {
@@ -623,7 +643,7 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
   });
 
   function doLogout() {
-    sessionStorage.removeItem(LS_KEY);
+    safeStore.remove(LS_KEY);
     CURRENT_SECRET = '';
     CUSTOMERS = [];
     FILTERED = [];
@@ -952,20 +972,26 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
   }
 
   (async function boot() {
-    const urlSecret   = getUrlSecret();
-    const savedSecret = sessionStorage.getItem(LS_KEY) || '';
-    const autoSecret  = urlSecret || savedSecret;
+    try {
+      const urlSecret   = getUrlSecret();
+      const savedSecret = safeStore.get(LS_KEY) || '';
+      const autoSecret  = urlSecret || savedSecret;
 
-    if (autoSecret) {
-      // Pre-fill input so user sees what was tried if it fails
-      $('login-input').value = autoSecret;
-      const ok = await tryLogin(autoSecret, true); // silent=true skips button state changes
-      if (!ok) {
-        showLoginError('Session expired or secret invalid. Please sign in again.');
-        $('login-input').select();
+      if (autoSecret) {
+        // Pre-fill input so user sees what was tried if it fails
+        $('login-input').value = autoSecret;
+        const ok = await tryLogin(autoSecret, true); // silent=true skips button state changes
+        if (!ok) {
+          showLoginError('Session expired or secret invalid. Please sign in again.');
+          $('login-input').select();
+        }
+      } else {
+        $('login-input').focus();
       }
-    } else {
-      $('login-input').focus();
+    } catch (e) {
+      // Never let boot errors break the login screen
+      console.error('[WL Boot]', e);
+      showLoginError('Could not auto-fill. Please enter your secret.');
     }
   })();
 })();
