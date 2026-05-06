@@ -483,12 +483,14 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
 <!-- ══ STANDALONE LOGIN SCRIPT — runs first, independent of main app ══ -->
 <script>
 (function () {
-  // This tiny script ONLY handles the sign-in button. It's deliberately
-  // kept simple and isolated so it can never be broken by issues in the
-  // main dashboard script below.
+  // This tiny script handles sign-in and showing the dashboard. It's
+  // deliberately kept simple and isolated so it can never be broken by
+  // issues in the main dashboard script below.
   var btn   = document.getElementById('login-btn');
   var input = document.getElementById('login-input');
   var errEl = document.getElementById('login-error');
+  var loginScreen = document.getElementById('login-screen');
+  var appShell    = document.getElementById('app-shell');
 
   function safeGet(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }
   function safeSet(k,v) { try { sessionStorage.setItem(k,v); } catch (e) {} }
@@ -500,6 +502,19 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
     btn.disabled = on;
     btn.textContent = on ? 'Signing in…' : 'Sign in';
     if (input) input.disabled = on;
+  }
+
+  function showDashboard(secret, customers) {
+    safeSet('wl_admin_secret', secret);
+    // Hand data off to the main dashboard script
+    window.__WL_DATA__ = { secret: secret, customers: customers || [] };
+    if (loginScreen) loginScreen.style.display = 'none';
+    if (appShell)    appShell.style.display    = 'grid';
+    // Tell main script to render. If it's not loaded yet, it will check the global on boot.
+    if (typeof window.__WL_RENDER__ === 'function') {
+      try { window.__WL_RENDER__(customers, secret); }
+      catch (e) { console.error('[WL Render]', e); }
+    }
   }
 
   async function doLogin(secret, silent) {
@@ -519,21 +534,7 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
         throw new Error('HTTP ' + res.status + (txt ? ': ' + txt.slice(0,120) : ''));
       }
       var data = await res.json();
-      safeSet('wl_admin_secret', secret);
-      // Hand off to main app via a global the dashboard script reads
-      window.__WL_BOOTSTRAP__ = { secret: secret, customers: data.customers || [] };
-      // If the main app exposed a hook, call it; otherwise reload to let it pick up the secret
-      if (typeof window.__WL_INIT_DASHBOARD__ === 'function') {
-        window.__WL_INIT_DASHBOARD__(data.customers || [], secret);
-      } else {
-        // Fallback: reload with secret in URL so the main script auto-logs-in
-        var sep = window.location.search ? '&' : '?';
-        if (window.location.search.indexOf('secret=') === -1) {
-          window.location.href = window.location.pathname + window.location.search + sep + 'secret=' + encodeURIComponent(secret);
-        } else {
-          window.location.reload();
-        }
-      }
+      showDashboard(secret, data.customers || []);
       return true;
     } catch (e) {
       console.error('[WL Login]', e);
@@ -554,14 +555,27 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
     input.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' && btn) btn.click();
     });
-    // Prefill from URL or sessionStorage
-    try {
-      var urlSecret = new URLSearchParams(window.location.search).get('secret') || '';
-      var saved = safeGet('wl_admin_secret') || '';
-      if (urlSecret) input.value = urlSecret;
-      else if (saved) input.value = saved;
-      else input.focus();
-    } catch (e) { input.focus(); }
+  }
+
+  // Auto-login: prefer ?secret= in URL, then sessionStorage
+  try {
+    var urlSecret = new URLSearchParams(window.location.search).get('secret') || '';
+    var saved = safeGet('wl_admin_secret') || '';
+    var auto = urlSecret || saved;
+    if (auto) {
+      if (input) input.value = auto;
+      doLogin(auto, true).then(function (ok) {
+        if (!ok) {
+          setErr('Session expired or secret invalid. Please sign in again.');
+          if (input) { input.select(); input.focus(); }
+        }
+      });
+    } else if (input) {
+      input.focus();
+    }
+  } catch (e) {
+    console.error('[WL Boot]', e);
+    if (input) input.focus();
   }
 })();
 </script>
@@ -1039,22 +1053,52 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
   window.exportCSV        = exportCSV;
   window.renderTable      = renderTable;
 
-  // ─── Boot: prefer ?secret= in URL, then sessionStorage, then show login ───
+  // ─── Boot: prefer data from standalone login script, then ?secret= in URL ───
   function getUrlSecret() {
     try { return new URLSearchParams(window.location.search).get('secret') || ''; }
     catch { return ''; }
   }
 
+  // Render hook called by the standalone login script after a successful login.
+  // The standalone script has already fetched customers and shown the dashboard,
+  // so we just populate state and render.
+  window.__WL_RENDER__ = function (customers, secret) {
+    try {
+      CUSTOMERS = customers || [];
+      CURRENT_SECRET = secret || '';
+      // Make sure the screens are correctly toggled (standalone script does this too,
+      // but be defensive).
+      const ls = $('login-screen'); if (ls) ls.style.display = 'none';
+      const as = $('app-shell');    if (as) as.style.display = 'grid';
+      initDashboard();
+    } catch (e) {
+      console.error('[WL Render]', e);
+    }
+  };
+
   (async function boot() {
     try {
+      // If standalone script already populated data, just render.
+      if (window.__WL_DATA__ && window.__WL_DATA__.customers) {
+        window.__WL_RENDER__(window.__WL_DATA__.customers, window.__WL_DATA__.secret);
+        return;
+      }
+
+      // Otherwise (standalone script didn't run or login still pending), wait
+      // briefly for it to finish, then fall back to our own auto-login.
+      await new Promise(r => setTimeout(r, 50));
+      if (window.__WL_DATA__ && window.__WL_DATA__.customers) {
+        window.__WL_RENDER__(window.__WL_DATA__.customers, window.__WL_DATA__.secret);
+        return;
+      }
+
       const urlSecret   = getUrlSecret();
       const savedSecret = ss.get(LS_KEY) || '';
       const autoSecret  = urlSecret || savedSecret;
 
       if (autoSecret) {
-        // Pre-fill input so user sees what was tried if it fails
         $('login-input').value = autoSecret;
-        const ok = await tryLogin(autoSecret, true); // silent=true skips button state changes
+        const ok = await tryLogin(autoSecret, true);
         if (!ok) {
           showLoginError('Session expired or secret invalid. Please sign in again.');
           $('login-input').select();
