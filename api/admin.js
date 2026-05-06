@@ -160,22 +160,21 @@ function renderDashboardHTML() {
 html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-font-smoothing:antialiased;line-height:1.5;font-size:14px;min-height:100vh}
 
 /* LAYOUT */
-.shell{display:grid;grid-template-columns:220px 1fr;min-height:100vh}
+.shell{display:flex;flex-direction:column;min-height:100vh}
 
-/* SIDEBAR */
-.sidebar{border-right:1px solid #f0f0ee;padding:28px 0;display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow:hidden;background:#fff}
-.brand{padding:0 20px 24px;display:flex;align-items:center;gap:10px;border-bottom:1px solid #f0f0ee;margin-bottom:16px}
+/* TOP BAR (replaces sidebar) */
+.topbar{display:flex;align-items:center;gap:24px;padding:14px 32px;border-bottom:1px solid #f0f0ee;background:#fff;position:sticky;top:0;z-index:50}
+.topbar-left{display:flex;align-items:center;gap:10px;flex-shrink:0}
 .brand-dot{width:26px;height:26px;background:#0a0a0a;border-radius:7px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
 .brand-dot svg{width:13px;height:13px;stroke:#fff;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
-.brand-name{font-size:13px;font-weight:600;letter-spacing:-.01em}
-.brand-sub{font-size:11px;color:#9a9a93}
-.nav{padding:0 10px;flex:1}
-.nav-label{font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#c0c0ba;padding:0 10px;margin:16px 0 6px}
-.nav-item{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:8px;cursor:pointer;transition:background .12s,color .12s;color:#6b6b66;font-size:13px;font-weight:500;text-decoration:none;margin-bottom:1px;user-select:none}
+.brand-name{font-size:14px;font-weight:600;letter-spacing:-.01em}
+.topnav{display:flex;align-items:center;gap:4px;flex:1}
+.nav-item{padding:7px 14px;border-radius:7px;cursor:pointer;transition:background .12s,color .12s;color:#6b6b66;font-size:13px;font-weight:500;text-decoration:none;user-select:none}
 .nav-item:hover{background:#f5f5f3;color:#0a0a0a}
 .nav-item.active{background:#0a0a0a;color:#fff}
-.nav-item svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
-.sidebar-footer{padding:16px 20px;border-top:1px solid #f0f0ee;margin-top:auto}
+.topbar-right{flex-shrink:0}
+.signout-btn{font-size:12px;color:#6b6b66;background:none;border:1px solid #e8e8e4;padding:6px 12px;border-radius:7px;cursor:pointer;font-family:'Inter',sans-serif;transition:all .12s}
+.signout-btn:hover{color:#0a0a0a;border-color:#0a0a0a}
 
 /* MAIN */
 .main{padding:36px 40px 80px;overflow-x:hidden;min-width:0}
@@ -317,8 +316,8 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 
 @media(max-width:880px){
-  .shell{grid-template-columns:1fr!important}
-  .sidebar{display:none!important}
+  .topbar{padding:12px 16px;gap:12px;flex-wrap:wrap}
+  .topnav{order:3;width:100%;overflow-x:auto}
   .capsules{grid-template-columns:repeat(2,1fr)}
   .grid3{grid-template-columns:1fr}
   .main{padding:24px 20px 60px}
@@ -342,33 +341,22 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
 <!-- ══ APP SHELL (shown after login) ══ -->
 <div class="shell" id="app-shell" style="display:none">
 
-  <!-- SIDEBAR -->
-  <aside class="sidebar">
-    <div class="brand">
+  <!-- TOP BAR (replaces sidebar) -->
+  <header class="topbar">
+    <div class="topbar-left">
       <div class="brand-dot">
         <svg viewBox="0 0 14 14"><path d="M7 1L9.5 5.5H13L10 8.5L11 12.5L7 10L3 12.5L4 8.5L1 5.5H4.5Z"/></svg>
       </div>
-      <div>
-        <div class="brand-name">Wishlist</div>
-        <div class="brand-sub">Admin</div>
-      </div>
+      <div class="brand-name">Wishlist Admin</div>
     </div>
-    <nav class="nav">
-      <div class="nav-label">Menu</div>
-      <a class="nav-item" id="nav-overview" onclick="showScreen('overview')">
-        <svg viewBox="0 0 16 16"><rect x="2" y="2" width="5" height="5" rx="1.2"/><rect x="9" y="2" width="5" height="5" rx="1.2"/><rect x="2" y="9" width="5" height="5" rx="1.2"/><rect x="9" y="9" width="5" height="5" rx="1.2"/></svg>
-        Overview
-      </a>
-      <a class="nav-item" id="nav-customers-full" onclick="showScreen('customers-full')">
-        <svg viewBox="0 0 16 16"><circle cx="6" cy="5" r="2.5"/><path d="M1 14c0-2.76 2.24-5 5-5s5 2.24 5 5"/><circle cx="12" cy="5" r="2"/><path d="M15 13c0-1.66-1.34-3-3-3"/></svg>
-        Customers
-      </a>
+    <nav class="topnav">
+      <a class="nav-item active" id="nav-overview" onclick="showScreen('overview')">Overview</a>
+      <a class="nav-item" id="nav-customers-full" onclick="showScreen('customers-full')">Customers</a>
     </nav>
-    <div class="sidebar-footer">
-      <div style="font-size:11px;color:#c0c0ba;margin-bottom:8px">Wishlist Admin</div>
-      <button onclick="doLogout()" style="font-size:11px;color:#9a9a93;background:none;border:none;cursor:pointer;font-family:'Inter',sans-serif;padding:0;transition:color .12s" onmouseover="this.style.color='#0a0a0a'" onmouseout="this.style.color='#9a9a93'">Sign out</button>
+    <div class="topbar-right">
+      <button class="signout-btn" onclick="doLogout()">Sign out</button>
     </div>
-  </aside>
+  </header>
 
   <!-- MAIN -->
   <main class="main">
@@ -509,12 +497,27 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
     // Hand data off to the main dashboard script
     window.__WL_DATA__ = { secret: secret, customers: customers || [] };
     if (loginScreen) loginScreen.style.display = 'none';
-    if (appShell)    appShell.style.display    = 'grid';
-    // Tell main script to render. If it's not loaded yet, it will check the global on boot.
-    if (typeof window.__WL_RENDER__ === 'function') {
-      try { window.__WL_RENDER__(customers, secret); }
-      catch (e) { console.error('[WL Render]', e); }
+    if (appShell)    appShell.style.display    = 'flex';
+
+    // Call the main script's render hook. Because the main script's IIFE may
+    // not have executed yet (it runs after this <script> block parses), poll
+    // for the hook to appear and then call it. This avoids any race condition.
+    var attempts = 0;
+    function tryRender() {
+      attempts++;
+      if (typeof window.__WL_RENDER__ === 'function') {
+        try { window.__WL_RENDER__(customers, secret); }
+        catch (e) { console.error('[WL Render]', e); }
+        return;
+      }
+      if (attempts < 100) { // up to ~5 seconds
+        setTimeout(tryRender, 50);
+      } else {
+        console.error('[WL] Main dashboard script did not load — render hook not found.');
+        if (errEl) errEl.textContent = 'Could not load dashboard. Please reload the page.';
+      }
     }
+    tryRender();
   }
 
   async function doLogin(secret, silent) {
@@ -706,7 +709,7 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
 
       // Show dashboard, hide login
       $('login-screen').style.display = 'none';
-      $('app-shell').style.display = 'grid';
+      $('app-shell').style.display = 'flex';
 
       initDashboard();
       return true;
@@ -746,11 +749,26 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
 
   // ─── Init dashboard after login ──────────────────────────
   function initDashboard() {
-    const now = new Date();
-    const d7  = new Date(now); d7.setDate(d7.getDate() - 7);
-    $('range-to').value   = now.toISOString().slice(0, 10);
-    $('range-from').value = d7.toISOString().slice(0, 10);
-    setRangeDays(7, $('chip-7'));
+    try {
+      const now = new Date();
+      const d7  = new Date(now); d7.setDate(d7.getDate() - 7);
+      const rt = $('range-to');   if (rt) rt.value = now.toISOString().slice(0, 10);
+      const rf = $('range-from'); if (rf) rf.value = d7.toISOString().slice(0, 10);
+      const chip = $('chip-7');
+      if (chip) {
+        setRangeDays(7, chip);
+      } else {
+        // Fallback: set state directly and render
+        const fromIso = d7.toISOString().slice(0, 10);
+        const toIso   = now.toISOString().slice(0, 10);
+        RANGE_START = fromIso; RANGE_END = toIso;
+        applyFilterAndRender();
+      }
+      // Ensure overview screen is visible
+      showScreen('overview');
+    } catch (e) {
+      console.error('[WL initDashboard]', e);
+    }
   }
 
   // ─── Date range ──────────────────────────────────────────
@@ -1069,7 +1087,7 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
       // Make sure the screens are correctly toggled (standalone script does this too,
       // but be defensive).
       const ls = $('login-screen'); if (ls) ls.style.display = 'none';
-      const as = $('app-shell');    if (as) as.style.display = 'grid';
+      const as = $('app-shell');    if (as) as.style.display = 'flex';
       initDashboard();
     } catch (e) {
       console.error('[WL Render]', e);
