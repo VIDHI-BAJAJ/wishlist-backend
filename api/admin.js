@@ -540,7 +540,13 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
     const url = '/api/admin?data=customers&secret=' + encodeURIComponent(secret);
     let res;
     try {
-      res = await fetch(url, { cache: 'no-store' });
+      res = await fetch(url, {
+  method: 'GET',
+  cache: 'no-store',
+  headers: {
+    'Accept': 'application/json'
+  }
+});
     } catch (netErr) {
       throw new Error('Network error \u2014 are you online? (' + netErr.message + ')');
     }
