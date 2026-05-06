@@ -13,24 +13,67 @@ const SHOPIFY_TOKEN   = process.env.SHOPIFY_ACCESS_TOKEN;
 const API_SECRET      = process.env.WISHLIST_API_SECRET || '';
 
 // ─── Shopify GraphQL helper ───────────────────────────────────────────────────
+// ─── Shopify GraphQL helper ───────────────────────────────────────────────────
 async function gql(query, variables = {}) {
-  const res = await fetch(
-    `https://${SHOPIFY_STORE}/admin/api/2024-10/graphql.json`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Shopify-Access-Token': SHOPIFY_TOKEN,
-      },
-      body: JSON.stringify({ query, variables }),
-    }
-  );
-  if (!res.ok) throw new Error(`Shopify API error: ${res.status} ${await res.text()}`);
-  const json = await res.json();
-  if (json.errors) throw new Error(JSON.stringify(json.errors));
-  return json.data;
-}
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.log('SHOPIFY DEBUG START');
+  console.log('SHOPIFY_STORE:', SHOPIFY_STORE);
+  console.log('TOKEN EXISTS:', !!SHOPIFY_TOKEN);
 
+  try {
+    const response = await fetch(
+      `https://${SHOPIFY_STORE}/admin/api/2024-10/graphql.json`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Shopify-Access-Token': SHOPIFY_TOKEN,
+        },
+        body: JSON.stringify({
+          query,
+          variables,
+        }),
+      }
+    );
+
+    const rawText = await response.text();
+
+    console.log('SHOPIFY STATUS:', response.status);
+    console.log('SHOPIFY RAW RESPONSE:', rawText);
+
+    if (!response.ok) {
+      throw new Error(
+        `Shopify API Error (${response.status}): ${rawText}`
+      );
+    }
+
+    let json;
+
+    try {
+      json = JSON.parse(rawText);
+    } catch (parseError) {
+      console.error('JSON PARSE ERROR:', parseError);
+      throw new Error('Invalid JSON returned from Shopify');
+    }
+
+    if (json.errors) {
+      console.error('GRAPHQL ERRORS:', json.errors);
+      throw new Error(JSON.stringify(json.errors));
+    }
+
+    console.log('SHOPIFY SUCCESS');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+    return json.data;
+
+  } catch (error) {
+    console.error('SHOPIFY FETCH FAILED:', error);
+
+    throw new Error(
+      error.message || 'Unknown Shopify GraphQL Error'
+    );
+  }
+}
 // ─── Main handler ─────────────────────────────────────────────────────────────
 module.exports = async function handler(req, res) {
   try {
@@ -54,8 +97,10 @@ module.exports = async function handler(req, res) {
     return res.status(200).send(renderDashboardHTML());
   } 
   catch (err) {
-  console.error('[Admin Error FULL]', err);
+  console.error('FULL SERVER ERROR:', err);
+
   return res.status(500).json({
+    success: false,
     error: err.message,
     stack: err.stack,
   });
