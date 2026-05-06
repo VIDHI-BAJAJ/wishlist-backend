@@ -45,8 +45,8 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ customers });
     }
 
-    // Pass the secret from the URL into the HTML so the dashboard can auto-fetch
-    const urlSecret = req.query.secret || '';
+    // Use env var secret directly - no need to pass via URL
+    const urlSecret = req.query.secret || API_SECRET || '';
 
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('Cache-Control', 'no-store');
@@ -496,26 +496,35 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
 
   // ── Load data and init dashboard ──
   async function loadAndInit(secret){
+    const errEl = $('boot-err');
+    const spinner = $('boot-loading').querySelector('.spinner');
+    const loadingMsg = $('boot-loading').querySelector('div:not(#boot-err)');
+    function showErr(msg){ spinner.style.display='none'; loadingMsg.style.display='none'; errEl.innerHTML=msg; }
     try {
-      const res = await fetch('/api/admin?data=customers&secret='+encodeURIComponent(secret));
-      if(res.status===401){
-        $('boot-err').textContent = 'Unauthorized — check your secret in the URL (?secret=…)';
-        return;
-      }
-      if(!res.ok) throw new Error('HTTP '+res.status);
+      const controller = new AbortController();
+      const timer = setTimeout(()=>controller.abort(), 25000);
+      let res;
+      try {
+        res = await fetch('/api/admin?data=customers&secret='+encodeURIComponent(secret), {signal:controller.signal});
+      } finally { clearTimeout(timer); }
+
+      if(res.status===401){ showErr('❌ <b>Unauthorized</b> — WISHLIST_API_SECRET env var is missing or wrong in Vercel. Check your Environment Variables.'); return; }
+      if(!res.ok){ const t=await res.text().catch(()=>''); throw new Error('HTTP '+res.status+': '+t.slice(0,200)); }
+
       const data = await res.json();
       ALL = data.customers||[];
       SECRET = secret;
       sessionStorage.setItem(LS, secret);
-
-      // Hide loader, show dashboard
       $('boot-loading').style.display = 'none';
       $('app-shell').style.display = 'grid';
-
       initDashboard();
     } catch(e) {
-      $('boot-err').textContent = 'Could not load data. Please refresh.';
-      console.error(e);
+      if(e.name==='AbortError'){
+        showErr('⏱ <b>Timed out</b> (25s) — Shopify API is not responding.<br>Check that <b>SHOPIFY_STORE_URL</b> and <b>SHOPIFY_ACCESS_TOKEN</b> are set correctly in Vercel.');
+      } else {
+        showErr('❌ <b>Error:</b> '+e.message+'<br><small>Open browser DevTools → Console for details.</small>');
+      }
+      console.error('[WL Admin Boot]', e);
     }
   }
 
