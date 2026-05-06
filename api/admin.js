@@ -480,6 +480,92 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
 
 <div class="toast" id="toast"></div>
 
+<!-- ══ STANDALONE LOGIN SCRIPT — runs first, independent of main app ══ -->
+<script>
+(function () {
+  // This tiny script ONLY handles the sign-in button. It's deliberately
+  // kept simple and isolated so it can never be broken by issues in the
+  // main dashboard script below.
+  var btn   = document.getElementById('login-btn');
+  var input = document.getElementById('login-input');
+  var errEl = document.getElementById('login-error');
+
+  function safeGet(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }
+  function safeSet(k,v) { try { sessionStorage.setItem(k,v); } catch (e) {} }
+  function safeDel(k) { try { sessionStorage.removeItem(k); } catch (e) {} }
+
+  function setErr(msg) { if (errEl) errEl.textContent = msg || ''; }
+  function setLoading(on) {
+    if (!btn) return;
+    btn.disabled = on;
+    btn.textContent = on ? 'Signing in…' : 'Sign in';
+    if (input) input.disabled = on;
+  }
+
+  async function doLogin(secret, silent) {
+    if (!secret) { if (!silent) setErr('Please enter your API secret.'); return false; }
+    if (!silent) { setLoading(true); setErr(''); }
+    try {
+      var url = window.location.origin + '/api/admin?data=customers&secret=' + encodeURIComponent(secret);
+      var res = await fetch(url);
+      if (res.status === 401) {
+        safeDel('wl_admin_secret');
+        if (!silent) setErr('Incorrect secret. Please try again.');
+        return false;
+      }
+      if (!res.ok) {
+        var txt = '';
+        try { txt = await res.text(); } catch (e) {}
+        throw new Error('HTTP ' + res.status + (txt ? ': ' + txt.slice(0,120) : ''));
+      }
+      var data = await res.json();
+      safeSet('wl_admin_secret', secret);
+      // Hand off to main app via a global the dashboard script reads
+      window.__WL_BOOTSTRAP__ = { secret: secret, customers: data.customers || [] };
+      // If the main app exposed a hook, call it; otherwise reload to let it pick up the secret
+      if (typeof window.__WL_INIT_DASHBOARD__ === 'function') {
+        window.__WL_INIT_DASHBOARD__(data.customers || [], secret);
+      } else {
+        // Fallback: reload with secret in URL so the main script auto-logs-in
+        var sep = window.location.search ? '&' : '?';
+        if (window.location.search.indexOf('secret=') === -1) {
+          window.location.href = window.location.pathname + window.location.search + sep + 'secret=' + encodeURIComponent(secret);
+        } else {
+          window.location.reload();
+        }
+      }
+      return true;
+    } catch (e) {
+      console.error('[WL Login]', e);
+      if (!silent) setErr('Error: ' + (e && e.message ? e.message : e));
+      return false;
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  }
+
+  if (btn) {
+    btn.addEventListener('click', function () {
+      var s = (input && input.value || '').trim();
+      doLogin(s, false);
+    });
+  }
+  if (input) {
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && btn) btn.click();
+    });
+    // Prefill from URL or sessionStorage
+    try {
+      var urlSecret = new URLSearchParams(window.location.search).get('secret') || '';
+      var saved = safeGet('wl_admin_secret') || '';
+      if (urlSecret) input.value = urlSecret;
+      else if (saved) input.value = saved;
+      else input.focus();
+    } catch (e) { input.focus(); }
+  }
+})();
+</script>
+
 <script>
 (function () {
   const LS_KEY = 'wl_admin_secret';
@@ -493,24 +579,12 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
   // ─── DOM refs ─────────────────────────────────────────────
   const $ = id => document.getElementById(id);
 
-  // ─── Safe storage (sessionStorage can throw inside Shopify Admin iframe) ─
-  // In embedded iframes (Shopify Admin) some browsers block storage access
-  // and throw a SecurityError. Wrap every call so a failure never kills
-  // the login flow — we just fall back to in-memory storage for the session.
-  let memStore = {};
-  const safeStore = {
-    get(k) {
-      try { return sessionStorage.getItem(k); }
-      catch (e) { return memStore[k] || null; }
-    },
-    set(k, v) {
-      try { sessionStorage.setItem(k, v); }
-      catch (e) { memStore[k] = v; }
-    },
-    remove(k) {
-      try { sessionStorage.removeItem(k); } catch (e) {}
-      delete memStore[k];
-    }
+  // ─── Safe storage (sessionStorage can throw inside iframes) ─
+  let _mem = {};
+  const ss = {
+    get(k) { try { return sessionStorage.getItem(k); } catch (e) { return _mem[k] || null; } },
+    set(k, v) { try { sessionStorage.setItem(k, v); } catch (e) { _mem[k] = v; } },
+    remove(k) { try { sessionStorage.removeItem(k); } catch (e) {} delete _mem[k]; }
   };
 
   // ─── Helpers ──────────────────────────────────────────────
@@ -602,7 +676,7 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
       const res = await fetch(url);
 
       if (res.status === 401) {
-        safeStore.remove(LS_KEY); // clear bad saved secret
+        ss.remove(LS_KEY); // clear bad saved secret
         if (!silent) showLoginError('Incorrect secret. Please try again.');
         return false;
       }
@@ -614,7 +688,7 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
       const data = await res.json();
       CUSTOMERS = data.customers || [];
       CURRENT_SECRET = secret;
-      safeStore.set(LS_KEY, secret);
+      ss.set(LS_KEY, secret);
 
       // Show dashboard, hide login
       $('login-screen').style.display = 'none';
@@ -625,7 +699,7 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
 
     } catch (e) {
       console.error('[WL Login]', e);
-      safeStore.remove(LS_KEY);
+      ss.remove(LS_KEY);
       if (!silent) showLoginError('Error: ' + e.message + '. Check console for details.');
       return false;
     } finally {
@@ -643,7 +717,7 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
   });
 
   function doLogout() {
-    safeStore.remove(LS_KEY);
+    ss.remove(LS_KEY);
     CURRENT_SECRET = '';
     CUSTOMERS = [];
     FILTERED = [];
@@ -974,7 +1048,7 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
   (async function boot() {
     try {
       const urlSecret   = getUrlSecret();
-      const savedSecret = safeStore.get(LS_KEY) || '';
+      const savedSecret = ss.get(LS_KEY) || '';
       const autoSecret  = urlSecret || savedSecret;
 
       if (autoSecret) {
@@ -989,9 +1063,7 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
         $('login-input').focus();
       }
     } catch (e) {
-      // Never let boot errors break the login screen
       console.error('[WL Boot]', e);
-      showLoginError('Could not auto-fill. Please enter your secret.');
     }
   })();
 })();
