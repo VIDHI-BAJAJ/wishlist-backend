@@ -540,9 +540,11 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
   function showScreen(name) {
     if (name !== 'customer-detail') PREV_SCREEN = name;
     ['overview', 'customers-full', 'customer-detail'].forEach(s => {
-      $('screen-' + s).style.display = 'none';
+      const el = $('screen-' + s);
+      if (el) el.style.display = 'none';
     });
-    $('screen-' + name).style.display = 'block';
+    const target = $('screen-' + name);
+    if (target) target.style.display = 'block';
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
     const map = { 'overview': 'nav-overview', 'customers-full': 'nav-customers-full' };
     const navKey = name === 'customer-detail'
@@ -553,39 +555,67 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
   }
 
   // ─── Login ────────────────────────────────────────────────
-  async function tryLogin(secret) {
-    $('login-error').textContent = '';
-    $('login-btn').disabled = true;
-    $('login-btn').textContent = 'Signing in…';
+  function setLoginState(loading) {
+    const btn = $('login-btn');
+    const inp = $('login-input');
+    if (!btn) return;
+    btn.disabled = loading;
+    btn.textContent = loading ? 'Signing in…' : 'Sign in';
+    if (inp) inp.disabled = loading;
+  }
+
+  function showLoginError(msg) {
+    const el = $('login-error');
+    if (el) el.textContent = msg;
+  }
+
+  async function tryLogin(secret, silent = false) {
+    if (!secret) return false;
+
+    if (!silent) {
+      setLoginState(true);
+      showLoginError('');
+    }
+
     try {
       const res = await fetch('/api/admin?data=customers&secret=' + encodeURIComponent(secret));
+
       if (res.status === 401) {
-        $('login-error').textContent = 'Incorrect secret.';
+        sessionStorage.removeItem(LS_KEY); // clear bad saved secret
+        if (!silent) showLoginError('Incorrect secret. Please try again.');
         return false;
       }
-      if (!res.ok) throw new Error('HTTP ' + res.status);
+      if (!res.ok) {
+        const txt = await res.text().catch(() => '');
+        throw new Error('HTTP ' + res.status + (txt ? ': ' + txt.slice(0, 120) : ''));
+      }
+
       const data = await res.json();
       CUSTOMERS = data.customers || [];
       CURRENT_SECRET = secret;
       sessionStorage.setItem(LS_KEY, secret);
+
+      // Show dashboard, hide login
       $('login-screen').style.display = 'none';
       $('app-shell').style.display = 'grid';
+
       initDashboard();
       return true;
+
     } catch (e) {
-      $('login-error').textContent = 'Could not load. Try again.';
-      console.error(e);
+      console.error('[WL Login]', e);
+      sessionStorage.removeItem(LS_KEY);
+      if (!silent) showLoginError('Error: ' + e.message + '. Check console for details.');
       return false;
     } finally {
-      $('login-btn').disabled = false;
-      $('login-btn').textContent = 'Sign in';
+      if (!silent) setLoginState(false);
     }
   }
 
   $('login-btn').addEventListener('click', () => {
     const secret = $('login-input').value.trim();
-    if (!secret) return;
-    tryLogin(secret);
+    if (!secret) { showLoginError('Please enter your API secret.'); return; }
+    tryLogin(secret, false);
   });
   $('login-input').addEventListener('keydown', e => {
     if (e.key === 'Enter') $('login-btn').click();
@@ -920,14 +950,23 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
     catch { return ''; }
   }
 
-  const urlSecret = getUrlSecret();
-  if (urlSecret) {
-    tryLogin(urlSecret);
-  } else {
-    const saved = sessionStorage.getItem(LS_KEY);
-    if (saved) tryLogin(saved);
-    else $('login-input').focus();
-  }
+  (async function boot() {
+    const urlSecret   = getUrlSecret();
+    const savedSecret = sessionStorage.getItem(LS_KEY) || '';
+    const autoSecret  = urlSecret || savedSecret;
+
+    if (autoSecret) {
+      // Pre-fill input so user sees what was tried if it fails
+      $('login-input').value = autoSecret;
+      const ok = await tryLogin(autoSecret, true); // silent=true skips button state changes
+      if (!ok) {
+        showLoginError('Session expired or secret invalid. Please sign in again.');
+        $('login-input').select();
+      }
+    } else {
+      $('login-input').focus();
+    }
+  })();
 })();
 </script>
 </body>
