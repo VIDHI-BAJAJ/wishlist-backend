@@ -1,10 +1,12 @@
-// Wishlist Admin Dashboard — v2
+// Wishlist Admin Dashboard — v3 (no login screen)
 // ─────────────────────────────────────────────────────────────────────────────
 // Two endpoints:
 //   GET /api/admin                           → HTML dashboard
 //   GET /api/admin?data=customers&secret=…   → JSON: customers grouped by phone
 //
 // Protected by WISHLIST_API_SECRET env var (set in Vercel dashboard).
+// Pass secret via URL: /api/admin?secret=YOUR_SECRET
+// Dashboard loads directly — no login screen.
 
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE_URL;
 const SHOPIFY_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
@@ -43,10 +45,13 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ customers });
     }
 
+    // Pass the secret from the URL into the HTML so the dashboard can auto-fetch
+    const urlSecret = req.query.secret || '';
+
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Security-Policy', "frame-ancestors 'self' https://*.myshopify.com https://admin.shopify.com");
-    return res.status(200).send(renderDashboardHTML());
+    return res.status(200).send(renderDashboardHTML(urlSecret));
   } catch (err) {
     console.error('[Admin Error]', err);
     res.setHeader('Content-Type', 'application/json');
@@ -123,7 +128,7 @@ async function getGroupedCustomers() {
 }
 
 // ─── Render HTML dashboard ────────────────────────────────────────────────────
-function renderDashboardHTML() {
+function renderDashboardHTML(initialSecret = '') {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -139,7 +144,6 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
 
 /* LAYOUT */
 .shell{display:grid;grid-template-columns:220px 1fr;min-height:100vh}
-.shell.no-sidebar{grid-template-columns:1fr}
 
 /* SIDEBAR */
 .sidebar{border-right:1px solid #f0f0ee;padding:28px 0;display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow:hidden;background:#fff}
@@ -155,9 +159,6 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
 .nav-item.active{background:#0a0a0a;color:#fff}
 .nav-item svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
 .sidebar-footer{padding:16px 20px;border-top:1px solid #f0f0ee;margin-top:auto}
-.logout-btn{display:flex;align-items:center;gap:8px;color:#6b6b66;font-size:13px;font-weight:500;cursor:pointer;background:none;border:none;width:100%;padding:0;font-family:'Inter',sans-serif;transition:color .12s}
-.logout-btn:hover{color:#0a0a0a}
-.logout-btn svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 
 /* MAIN */
 .main{padding:36px 40px 80px;overflow-x:hidden;min-width:0}
@@ -166,21 +167,10 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
 .screen{display:none}
 .screen.active{display:block}
 
-/* ═══ LOGIN ═══ */
-.login-outer{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;background:#fff;padding:20px}
-.login-card{width:100%;max-width:380px}
-.login-eyebrow{font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:#9a9a93;margin-bottom:18px}
-.login-title{font-size:30px;font-weight:300;letter-spacing:-.03em;line-height:1.15;margin-bottom:8px}
-.login-sub{font-size:13px;color:#6b6b66;margin-bottom:30px}
-.field-label{font-size:11px;font-weight:600;color:#6b6b66;display:block;margin-bottom:5px;letter-spacing:.03em}
-.field-input{width:100%;padding:10px 13px;border:1px solid #e8e8e4;border-radius:8px;font-size:14px;font-family:'Inter',sans-serif;outline:none;transition:border-color .15s;background:#fff;color:#0a0a0a;margin-bottom:10px}
-.field-input:focus{border-color:#0a0a0a}
-.primary-btn{width:100%;padding:11px;background:#0a0a0a;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:500;font-family:'Inter',sans-serif;cursor:pointer;transition:opacity .15s;letter-spacing:-.01em}
-.primary-btn:hover{opacity:.85}
-.primary-btn:disabled{opacity:.35;cursor:not-allowed}
-.login-err{font-size:12px;color:#c0392b;margin-top:8px;min-height:16px}
-.login-hint{margin-top:20px;font-size:11px;color:#9a9a93;line-height:1.6}
-.login-hint code{background:#f5f5f3;padding:1px 5px;border-radius:3px;font-size:10px}
+/* ═══ LOADING SCREEN ═══ */
+.loading-outer{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;background:#fff}
+.loading-title{font-size:15px;font-weight:400;color:#6b6b66;margin-top:16px}
+.loading-err{font-size:13px;color:#c0392b;margin-top:12px}
 
 /* ═══ PAGE HEADER ═══ */
 .page-header{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px}
@@ -316,10 +306,17 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
 </head>
 <body>
 
-<div class="shell no-sidebar" id="app-shell">
+<!-- Full-page loading spinner shown while data fetches -->
+<div id="boot-loading" style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;background:#fff">
+  <div class="spinner"></div>
+  <div style="font-size:13px;color:#9a9a93;margin-top:14px">Loading dashboard…</div>
+  <div id="boot-err" style="font-size:13px;color:#c0392b;margin-top:10px"></div>
+</div>
+
+<div class="shell" id="app-shell" style="display:none">
 
   <!-- ══ SIDEBAR ══ -->
-  <aside class="sidebar" id="sidebar" style="display:none">
+  <aside class="sidebar" id="sidebar">
     <div class="brand">
       <div class="brand-dot">
         <svg viewBox="0 0 14 14"><path d="M7 1L9.5 5.5H13L10 8.5L11 12.5L7 10L3 12.5L4 8.5L1 5.5H4.5Z"/></svg>
@@ -340,32 +337,13 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
         Customers
       </a>
     </nav>
-    <div class="sidebar-footer">
-      <button class="logout-btn" onclick="doLogout()">
-        <svg viewBox="0 0 16 16"><path d="M10 8H3M3 8L5 6M3 8L5 10"/><path d="M7 4V2.5A.5.5 0 017.5 2h6a.5.5 0 01.5.5v11a.5.5 0 01-.5.5h-6a.5.5 0 01-.5-.5V12"/></svg>
-        Sign out
-      </button>
+    <div class="sidebar-footer" style="padding:16px 20px;border-top:1px solid #f0f0ee;margin-top:auto">
+      <div style="font-size:11px;color:#c0c0ba">Wishlist Admin v3</div>
     </div>
   </aside>
 
   <!-- ══ MAIN ══ -->
   <main class="main">
-
-    <!-- LOGIN -->
-    <div id="screen-login" class="screen active">
-      <div class="login-outer">
-        <div class="login-card">
-          <div class="login-eyebrow">Wishlist Admin</div>
-          <h1 class="login-title">Sign in to your<br/>dashboard</h1>
-          <p class="login-sub">Enter your API secret to continue.</p>
-          <label class="field-label">API Secret</label>
-          <input class="field-input" type="password" id="login-input" placeholder="Enter your secret…" autocomplete="current-password"/>
-          <button class="primary-btn" id="login-btn" onclick="tryLogin()">Continue →</button>
-          <div class="login-err" id="login-err"></div>
-          <p class="login-hint">Tip: bookmark <code>/api/admin?secret=YOUR_SECRET</code> to skip this screen.</p>
-        </div>
-      </div>
-    </div>
 
     <!-- OVERVIEW -->
     <div id="screen-overview" class="screen">
@@ -482,14 +460,16 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
 <script>
 (function(){
   const LS = 'wl_admin_v2';
-  let ALL = [];          // all customers from API
-  let FILTERED = [];     // filtered by date range
+  let ALL = [];
+  let FILTERED = [];
   let SECRET = '';
   let RANGE_START = null;
   let RANGE_END   = null;
   let PREV_SCREEN = 'overview';
 
-  // ── DOM helpers ──
+  // Secret injected server-side (from URL param when page was loaded)
+  const SERVER_SECRET = ${JSON.stringify(initialSecret)};
+
   function $(id){ return document.getElementById(id); }
   function esc(s){ return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
   function fmt(n){ if(!n||isNaN(n)) return '₹0'; return '₹'+Number(n).toLocaleString('en-IN',{maximumFractionDigits:2}); }
@@ -507,7 +487,6 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
     if(name!=='customer-detail') PREV_SCREEN=name;
     document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
     $('screen-'+name).classList.add('active');
-    // nav highlight
     document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
     const map = {'overview':'nav-overview','customers-full':'nav-customers-full'};
     const navKey = name==='customer-detail' ? (PREV_SCREEN==='customers-full'?'nav-customers-full':'nav-overview') : map[name];
@@ -515,49 +494,32 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
     if(name==='customers-full') renderTable();
   }
 
-  // ── Login ──
-  $('login-input').addEventListener('keydown', e=>{ if(e.key==='Enter') tryLogin(); });
-
-  async function tryLogin(){
-    const secret = $('login-input').value.trim();
-    if(!secret) return;
-    $('login-err').textContent = '';
-    $('login-btn').disabled = true;
-    $('login-btn').textContent = 'Loading…';
-    try{
+  // ── Load data and init dashboard ──
+  async function loadAndInit(secret){
+    try {
       const res = await fetch('/api/admin?data=customers&secret='+encodeURIComponent(secret));
-      if(res.status===401){ $('login-err').textContent='Incorrect secret.'; return; }
+      if(res.status===401){
+        $('boot-err').textContent = 'Unauthorized — check your secret in the URL (?secret=…)';
+        return;
+      }
       if(!res.ok) throw new Error('HTTP '+res.status);
       const data = await res.json();
       ALL = data.customers||[];
       SECRET = secret;
       sessionStorage.setItem(LS, secret);
+
+      // Hide loader, show dashboard
+      $('boot-loading').style.display = 'none';
+      $('app-shell').style.display = 'grid';
+
       initDashboard();
-    }catch(e){
-      $('login-err').textContent='Could not connect. Please try again.';
+    } catch(e) {
+      $('boot-err').textContent = 'Could not load data. Please refresh.';
       console.error(e);
-    }finally{
-      $('login-btn').disabled=false;
-      $('login-btn').textContent='Continue →';
     }
   }
 
-  function doLogout(){
-    sessionStorage.removeItem(LS);
-    ALL=[]; SECRET=''; FILTERED=[];
-    $('sidebar').style.display='none';
-    $('app-shell').className='shell no-sidebar';
-    document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
-    $('screen-login').classList.add('active');
-    $('login-input').value='';
-    if(window.history&&window.history.replaceState) window.history.replaceState({},'',window.location.pathname);
-  }
-
-  // ── Init dashboard after login ──
   function initDashboard(){
-    $('sidebar').style.display='flex';
-    $('app-shell').className='shell';
-    // Default: last 7 days
     const now = new Date();
     const d7  = new Date(now); d7.setDate(d7.getDate()-7);
     $('range-to').value   = now.toISOString().slice(0,10);
@@ -570,7 +532,6 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
     document.querySelectorAll('.date-chip').forEach(c=>c.classList.remove('active'));
     btn.classList.add('active');
     if(days===0){
-      // All time — no filter
       RANGE_START=null; RANGE_END=null;
       $('range-from').value='';
       $('range-to').value='';
@@ -752,7 +713,6 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
     const maxC = Math.max(...days.map(d=>d.count), 1);
     const pad=6; const cW=W-pad*2; const cH=H-18;
 
-    // draw
     ctx.beginPath();
     days.forEach((d,i)=>{
       const x = pad+i*(cW/(buckets-1||1));
@@ -761,12 +721,10 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
     });
     ctx.strokeStyle='#0a0a0a'; ctx.lineWidth=1.5; ctx.lineJoin='round'; ctx.lineCap='round'; ctx.stroke();
 
-    // fill
     ctx.lineTo(pad+(buckets-1)*(cW/(buckets-1||1)), H-14);
     ctx.lineTo(pad,H-14); ctx.closePath();
     ctx.fillStyle='rgba(10,10,10,0.05)'; ctx.fill();
 
-    // dots
     days.forEach((d,i)=>{
       const x = pad+i*(cW/(buckets-1||1));
       const y = H-14-(d.count/maxC*(cH-6));
@@ -811,7 +769,6 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
     if(!c) return;
     const from = PREV_SCREEN;
     $('back-btn').onclick = ()=> showScreen(from==='customers-full'?'customers-full':'overview');
-    $('back-btn').querySelector('span') && ($('back-btn').querySelector('span').textContent = from==='customers-full'?'Back to customers':'Back to overview');
 
     $('detail-content').innerHTML = \`
       <div class="detail-profile">
@@ -841,7 +798,6 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
     \`;
     showScreen('customer-detail');
   }
-  // expose globally
   window.openDetail = openDetail;
 
   // ── CSV Export ──
@@ -857,24 +813,25 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
     toast('CSV downloaded ✓');
   }
 
-  // expose globals used in onclick
-  window.tryLogin       = tryLogin;
-  window.doLogout       = doLogout;
-  window.showScreen     = showScreen;
-  window.setRangeDays   = setRangeDays;
-  window.applyCustomRange = applyCustomRange;
-  window.exportCSV      = exportCSV;
-  window.renderTable    = renderTable;
+  window.showScreen      = showScreen;
+  window.setRangeDays    = setRangeDays;
+  window.applyCustomRange= applyCustomRange;
+  window.exportCSV       = exportCSV;
+  window.renderTable     = renderTable;
 
-  // ── Boot ──
+  // ── Boot: resolve secret then load directly ──
   (function boot(){
-    const urlSecret = new URLSearchParams(location.search).get('secret')||'';
-    const saved     = sessionStorage.getItem(LS)||'';
-    const secret    = urlSecret||saved;
-    if(secret){
-      $('login-input').value=secret;
-      tryLogin();
+    const urlSecret   = new URLSearchParams(location.search).get('secret') || '';
+    const savedSecret = sessionStorage.getItem(LS) || '';
+    const secret      = SERVER_SECRET || urlSecret || savedSecret;
+
+    if(!secret){
+      $('boot-loading').querySelector('div:last-child').textContent = '';
+      $('boot-err').textContent = 'No secret found. Please open /api/admin?secret=YOUR_SECRET';
+      return;
     }
+
+    loadAndInit(secret);
   })();
 
 })();
