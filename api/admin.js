@@ -171,7 +171,7 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
 .topnav{display:flex;align-items:center;gap:4px;flex:1}
 .nav-item{padding:7px 14px;border-radius:7px;cursor:pointer;transition:background .12s,color .12s;color:#6b6b66;font-size:13px;font-weight:500;text-decoration:none;user-select:none}
 .nav-item:hover{background:#f5f5f3;color:#0a0a0a}
-.nav-item.active{background:#0a0a0a;color:#fff}
+.nav-item.active{background:#485861;color:#fff}
 .topbar-right{flex-shrink:0}
 .signout-btn{font-size:12px;color:#6b6b66;background:none;border:1px solid #e8e8e4;padding:6px 12px;border-radius:7px;cursor:pointer;font-family:'Inter',sans-serif;transition:all .12s}
 .signout-btn:hover{color:#0a0a0a;border-color:#0a0a0a}
@@ -206,7 +206,7 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
 .date-bar-label{font-size:11px;font-weight:600;color:#9a9a93;letter-spacing:.06em;text-transform:uppercase;margin-right:4px;white-space:nowrap}
 .date-chip{padding:6px 12px;border:1px solid #e8e8e4;border-radius:20px;font-size:12px;font-weight:500;cursor:pointer;background:#fff;transition:all .12s;color:#6b6b66;font-family:'Inter',sans-serif;white-space:nowrap}
 .date-chip:hover{border-color:#0a0a0a;color:#0a0a0a}
-.date-chip.active{background:#0a0a0a;border-color:#0a0a0a;color:#fff}
+.date-chip.active{background:#485861;border-color:#0a0a0a;color:#fff}
 .date-divider{width:1px;height:18px;background:#e8e8e4;margin:0 4px;flex-shrink:0}
 .custom-dates{display:flex;align-items:center;gap:6px}
 .date-in{padding:5px 10px;border:1px solid #e8e8e4;border-radius:7px;font-size:12px;font-family:'Inter',sans-serif;outline:none;background:#fff;color:#0a0a0a;transition:border-color .15s}
@@ -344,9 +344,6 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
   <!-- TOP BAR (replaces sidebar) -->
   <header class="topbar">
     <div class="topbar-left">
-      <div class="brand-dot">
-        <svg viewBox="0 0 14 14"><path d="M7 1L9.5 5.5H13L10 8.5L11 12.5L7 10L3 12.5L4 8.5L1 5.5H4.5Z"/></svg>
-      </div>
       <div class="brand-name">Wishlist Admin</div>
     </div>
     <nav class="topnav">
@@ -849,25 +846,25 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
     const top = FILTERED.reduce((m, c) => Math.max(m, c.items.length), 0);
     $('capsules').innerHTML = \`
       <div class="cap">
-        <div class="cap-accent" style="background:#0a0a0a"></div>
+        <div class="cap-accent" style="background:#485861"></div>
         <div class="cap-label">Customers</div>
         <div class="cap-value">\${tc}</div>
         <div class="cap-sub">in selected range</div>
       </div>
       <div class="cap">
-        <div class="cap-accent" style="background:#4a55c1"></div>
+        <div class="cap-accent" style="background:#485861"></div>
         <div class="cap-label">Total Items</div>
         <div class="cap-value">\${ti}</div>
         <div class="cap-sub">saved products</div>
       </div>
       <div class="cap">
-        <div class="cap-accent" style="background:#1a7f5a"></div>
+        <div class="cap-accent" style="background:#485861"></div>
         <div class="cap-label">Avg Items</div>
         <div class="cap-value">\${avg}</div>
         <div class="cap-sub">per customer</div>
       </div>
       <div class="cap">
-        <div class="cap-accent" style="background:#b07800"></div>
+        <div class="cap-accent" style="background:#485861"></div>
         <div class="cap-label">Most Wishlisted</div>
         <div class="cap-value">\${top}</div>
         <div class="cap-sub">items by one customer</div>
@@ -920,11 +917,11 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
 
   function renderPriceDist() {
     const brackets = [
-      { l: '< ₹500',    min: 0,     max: 500,      c: '#4a55c1' },
-      { l: '₹500–2k',   min: 500,   max: 2000,     c: '#1a7f5a' },
-      { l: '₹2k–5k',    min: 2000,  max: 5000,     c: '#b07800' },
-      { l: '₹5k–10k',   min: 5000,  max: 10000,    c: '#c0392b' },
-      { l: '> ₹10k',    min: 10000, max: Infinity,  c: '#0a0a0a' },
+      { l: '< ₹500',    min: 0,     max: 500,      c: '#50D5FA' },
+      { l: '₹500–2k',   min: 500,   max: 2000,     c: '#485861' },
+      { l: '₹2k–5k',    min: 2000,  max: 5000,     c: '#94B4BC' },
+      { l: '₹5k–10k',   min: 5000,  max: 10000,    c: '#50D5FA' },
+      { l: '> ₹10k',    min: 10000, max: Infinity,  c: '#94B4BC' },
     ];
     const all  = FILTERED.flatMap(c => c.items);
     const rows = brackets.map(b => ({ ...b, n: all.filter(it => it.product_price >= b.min && it.product_price < b.max).length }));
