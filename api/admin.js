@@ -1065,10 +1065,10 @@ html,body{font-family:'Inter',sans-serif;background:#fff;color:#0a0a0a;-webkit-f
     const csv = rows.map(r =>
       r.map(cell => {
         const s = String(cell == null ? '' : cell);
-        if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+        if (/[",\\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
         return s;
       }).join(',')
-    ).join('\n');
+    ).join('\\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
